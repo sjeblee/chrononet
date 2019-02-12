@@ -13,8 +13,12 @@ def check_feats(feats, seq, labels):
 def sent_features(df):
     df['feats'] = ''
     for i, row in df.iterrows():
-        seq_list = ast.literal_eval(row['seq'])
-        label_list = ast.literal_eval(row['seq_labels'])
+        seq_list = row['seq']
+        label_list = row['seq_labels']
+        if type(seq_list) == str:
+            seq_list = ast.literal_eval(seq_list)
+        if type(label_list) == str:
+            label_list = ast.literal_eval(label_list)
         sent = list(zip(seq_list, label_list))
         feats = sent2features(sent)
         check_feats(feats, seq_list, label_list)

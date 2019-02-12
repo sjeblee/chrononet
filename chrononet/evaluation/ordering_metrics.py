@@ -1,0 +1,101 @@
+#!/usr/bin/python3
+# Temporal ordering evaluation functions
+# All functions should be of the form function(y_true, y_pred)
+
+import math
+import numpy
+
+# Metric functions #########################
+
+''' Calculate the mean squared error of the predicted ranks
+'''
+def rank_mse(true_ranks, pred_ranks):
+    mse_scores = []
+    for n in range(len(true_ranks)):
+        num_samples = len(true_ranks[n])
+        error_sum = 0
+        for x in range(num_samples):
+            error_sum += (true_ranks[n][x] - pred_ranks[n][x]) ** 2
+        mse_scores.append(error_sum/float(num_samples))
+    return numpy.average(numpy.asarray(mse_scores))
+
+
+''' Calculate the pairwise accuracy of a listwise ranking
+    Currently this is a macro average (every document has equal weight)
+'''
+def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.001):
+    accuracies = []
+    for n in range(len(true_ranks)):
+        pr = pred_ranks[n]
+        se, so = get_ordered_pairs(true_ranks[n])
+        num_pairs = len(so) + len(se)
+        so_correct = 0
+        se_correct = 0
+        for pair in so:
+            if pr[pair[0]] < pr[pair[1]]:
+                so_correct += 1
+        for pair in se:
+            if math.fabs(pr[pair[0]] - pr[pair[1]]) <= eps:
+                se_correct += 1
+        accuracy = (so_correct + se_correct)/float(num_pairs)
+        accuracies.append(accuracy)
+    if len(accuracies) > 1:
+        acc = numpy.average(numpy.asarray(accuracies))
+    else:
+        acc = accuracies[0]
+    return acc
+
+# Utility functions ########################
+
+
+''' From the ranks, generate pairs of events with equal rank, and ordered ranks
+'''
+def get_ordered_pairs(ranks):
+    num = len(ranks)
+    equal_pairs = []
+    ordered_pairs = []
+    for x in range(num):
+        first = ranks[x]
+        for y in range(num):
+            if x != y:
+                second = ranks[y]
+                if first == second:
+                    equal_pairs.append((x, y))
+                elif first < second:
+                    ordered_pairs.append((x, y))
+    return equal_pairs, ordered_pairs
+
+
+''' Generate all pair relations for ranked events
+'''
+def pair_relations(events, ranks, eps=0.0):
+    pairs = []
+    relations = []
+    for n in range(len(events)):
+        event_list = events[n]
+        rank_list = ranks[n]
+        doc_pairs = []
+        doc_labels = []
+        for x in range(len(event_list)):
+            for y in range(len(event_list)):
+                if x != y:
+                    event1 = event_list[x]
+                    event2 = event_list[y]
+                    rank1 = float(rank_list[x])
+                    rank2 = float(rank_list[y])
+                    rel_type = 'OVERLAP'
+                    if math.fabs(rank1-rank2) <= eps:
+                        rel_type = 'OVERLAP'
+                    elif rank1 < rank2:
+                        rel_type = 'BEFORE'
+                    elif rank1 > rank2:
+                        rel_type = 'AFTER'
+                    #print("rank pair", str(rank1), str(rank2), rel_type)
+                    doc_pairs.append((event1, event2))
+                    doc_labels.append(rel_type)
+        pairs.append(doc_pairs)
+        relations.append(doc_labels)
+    return pairs, relations
+
+def str_pair(event_pair):
+    return event_pair[0].attrib['eid'] + ' ' + event_pair[0].text + ' ' + event_pair[1].attrib['eid'] + ' ' + event_pair[1].text

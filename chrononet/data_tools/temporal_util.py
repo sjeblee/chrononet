@@ -113,6 +113,7 @@ def print_time(t):
 
 # ------------- Datetime functions ----------------
 
+
 ''' Check if two time types are comparable, i.e. if the times have the 'BEFORE' relation, is this valid?
 '''
 def are_comparable(timerel1, timerel2):
@@ -130,6 +131,7 @@ def compare_types(timerel1, timerel2):
         return TimeRel.BEFORE
     else:
         return unk
+
 
 ''' Compare two events and see if one is before the other
 '''
@@ -243,6 +245,7 @@ def time_value(timex_element):
         return iso_datetime.isoformat()
     else:
         return timex_element.text
+
 
 '''
 Convert a text representing a date to a date object

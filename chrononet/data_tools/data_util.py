@@ -34,6 +34,38 @@ def collapse_labels(labels):
             flat_labels.append(item)
     return flat_labels
 
+def extract_ranks(events, event_list=None):
+    elem = load_xml_tags(events)
+    ranks = []
+    event_map = {}
+    print('events:', type(events))
+
+    if event_list is not None:
+        for event in event_list:
+            #print(etree.tostring(event))
+            id = event.get('eid')
+            rank = event.get('rank')
+            if rank is None:
+                print('ERROR: no rank attribute found:', etree.tostring(event))
+                rank = 0
+            event_map[id] = rank
+
+    for event in elem:
+        if event.tag == 'EVENT':
+            print('elem:', etree.tostring(event))
+            if event_list is None:
+                rank = event.get('rank')
+            else:
+                eventid = event.get('eid')
+                print('looking up eid', eventid)
+                rank = event_map[eventid]
+            if rank is None:
+                print('ERROR: no rank attribute found:', etree.tostring(event))
+                ranks.append(0)
+            else:
+                ranks.append(rank)
+    return ranks
+
 
 ''' Convert arrows in text to non-arrows (for xml processing)
     filename: the file to fix (file will be overwritten)
@@ -82,6 +114,26 @@ def fix_line_breaks(filename, rec_type):
     out = open(filename, 'w')
     out.write(output)
     out.close()
+
+
+def fix_xml_tags(text):
+    text = text.replace('&lt;EVENT&gt;', '<EVENT>').replace('&lt;/EVENT&gt;', '</EVENT>')
+    text = text.replace('&lt;TIMEX3&gt;', '<TIMEX3>').replace('&lt;/TIMEX3&gt;', '</TIMEX3>')
+    text = text.replace('&lt;TLINK', '<TLINK').replace('/&gt;', '/>')
+    text = text.replace('" &gt;', '">').replace(' >', '>')
+    text = text.replace('&', '&amp;') # escape any leftover and signs
+    return text
+
+
+def load_xml_tags(ann):
+    ann = ann.decode('utf8')
+    #print('ann:', ann)
+    ann_xml = etree.fromstring(ann)
+    ann_text = fix_xml_tags(ann_xml.text) # Escape & signs that might have been unescaped
+    #if len(ann_text) > 830:
+    #    print(ann_text[820:])
+    ann_element = etree.fromstring("<root>" + ann_text + "</root>")
+    return ann_element
 
 
 def score_majority_class(true_labs):

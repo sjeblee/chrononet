@@ -4,8 +4,9 @@
 import ast
 import numpy
 
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from sklearn.preprocessing import LabelEncoder
 
+# Local imports
 from data_tools import data_util
 
 debug = True
@@ -24,7 +25,7 @@ def to_feats(df, use_numpy=True):
     if debug:
         print('to_feats: ', len(feats))
     if use_numpy:
-        return numpy.asarray(feats)
+        return numpy.asarray(feats).astype('float')
     else:
         return feats
 
@@ -33,7 +34,8 @@ def to_labels(df, labelname, labelencoder=None, encode=True):
     labels = []
     for i, row in df.iterrows():
         flist = row[labelname]
-        flist = ast.literal_eval(flist)
+        if type(flist) == str:
+            flist = ast.literal_eval(flist)
         if debug and i == 0:
             print('labels[0]:', flist)
         labels.append(flist)
@@ -117,3 +119,7 @@ def decode_all_labels(data, labenc=None):
         labs = decode_labels(sequence, labenc)
         decoded_labels.append(labs)
     return decoded_labels
+
+def dummy_function(df):
+    df['feats'] = '0'
+    return df
