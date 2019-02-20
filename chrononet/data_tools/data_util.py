@@ -10,7 +10,10 @@ from sklearn import metrics
 import numpy
 import operator
 import pandas
+import re
 import subprocess
+
+debug = True
 
 #def clean_file(filename):
     # remove blank lines | remove extra spaces| remove leading and trailing spaces  | fix utf-8 chars
@@ -38,32 +41,44 @@ def extract_ranks(events, event_list=None):
     elem = load_xml_tags(events)
     ranks = []
     event_map = {}
-    print('events:', type(events))
+    if debug: print('extract_ranks: events:', type(events))# 'elem:', etree.tostring(elem))
+    if debug: print('extract_ranks: event_list:', type(event_list))
 
     if event_list is not None:
         for event in event_list:
-            #print(etree.tostring(event))
-            id = event.get('eid')
-            rank = event.get('rank')
-            if rank is None:
-                print('ERROR: no rank attribute found:', etree.tostring(event))
-                rank = 0
-            event_map[id] = rank
+            if event.tag == 'EVENT':
+                #print(etree.tostring(event))
+                id = event.get('eid')
+                rank = event.get('rank')
+                if rank is None:
+                    print('ERROR: no rank attribute found:', etree.tostring(event))
+                    rank = 0
+                event_map[id] = rank
 
+    event_count = 0
     for event in elem:
+        print('child tag:', event.tag)
         if event.tag == 'EVENT':
-            print('elem:', etree.tostring(event))
+            event_count += 1
+            print('elem event:', etree.tostring(event))
             if event_list is None:
                 rank = event.get('rank')
             else:
                 eventid = event.get('eid')
                 print('looking up eid', eventid)
                 rank = event_map[eventid]
+            if int(rank) == 0:
+                print('WARNING: rank is 0:', etree.tostring(event))
             if rank is None:
                 print('ERROR: no rank attribute found:', etree.tostring(event))
+                rank = 0
                 ranks.append(0)
             else:
-                ranks.append(rank)
+                ranks.append(int(rank))
+            if int(rank) == 0:
+                print('WARNING: rank is 0:', etree.tostring(event))
+    print('events:', event_count, 'ranks:', len(ranks))
+    assert(len(ranks) == event_count)
     return ranks
 
 
@@ -125,11 +140,15 @@ def fix_xml_tags(text):
     return text
 
 
-def load_xml_tags(ann):
-    ann = ann.decode('utf8')
-    #print('ann:', ann)
-    ann_xml = etree.fromstring(ann)
-    ann_text = fix_xml_tags(ann_xml.text) # Escape & signs that might have been unescaped
+def load_xml_tags(ann, unwrap=True):
+    print('load_xml_tags:', ann)
+    if unwrap:
+        ann = ann.decode('utf8')
+        ann_xml = etree.fromstring(ann)
+        ann_text = ann_xml.text
+    else:
+        ann_text = ann
+    ann_text = fix_xml_tags(ann_text) # Escape & signs that might have been unescaped
     #if len(ann_text) > 830:
     #    print(ann_text[820:])
     ann_element = etree.fromstring("<root>" + ann_text + "</root>")
@@ -212,6 +231,13 @@ def score_vec_labels(true_labs, pred_labs):
     else:
         micro_f1 = 2*(micro_p*micro_r)/(micro_p+micro_r)
     return precision, recall, f1, micro_p, micro_r, micro_f1
+
+
+''' A function for separating words and punctuation
+    Not using NLTK because it would split apart contractions and we don't want that
+'''
+def split_words(text):
+    return re.findall(r"[\w']+|[.,!?;$=/\-\[\]]", text.strip())
 
 
 ''' Get content of a tree node as a string

@@ -10,9 +10,15 @@ import numpy
 ''' Calculate the mean squared error of the predicted ranks
 '''
 def rank_mse(true_ranks, pred_ranks):
+    print('rank_mse: true:', len(true_ranks), 'pred:', len(pred_ranks))
+    if len(true_ranks) != len(pred_ranks):
+        print('ERROR: length mismatch of true and pred ranks')
+    assert(len(true_ranks) == len(pred_ranks))
     mse_scores = []
     for n in range(len(true_ranks)):
+        print('entry types: true:', type(true_ranks[n]), len(true_ranks[n]), 'pred:', type(pred_ranks[n]), len(pred_ranks[n]))
         num_samples = len(true_ranks[n])
+        assert(num_samples == len(pred_ranks[n]))
         error_sum = 0
         for x in range(num_samples):
             error_sum += (true_ranks[n][x] - pred_ranks[n][x]) ** 2

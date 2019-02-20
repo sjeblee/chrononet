@@ -4,6 +4,7 @@
 import ast
 import numpy
 
+from lxml import etree
 from sklearn.preprocessing import LabelEncoder
 
 # Local imports
@@ -13,43 +14,68 @@ debug = True
 
 
 ''' Convert the dataframe feature column to a numpy array for processing
+    use_numpy: True if we should convert to a numpy array
+    doc_level: True if features should aggregate features at the document level (NOT IMPLEMENTED)
 '''
-def to_feats(df, use_numpy=True):
+def to_feats(df, use_numpy=True, doc_level=False):
+    print('to_feats: use_numpy:', use_numpy, 'doc_level:', doc_level)
     feats = []
     for i, row in df.iterrows():
         flist = row['feats']
-        #flist = ast.literal_eval(row['feats'])
-        if debug and i == 0:
-            print('feats[0]:', flist)
+        #if debug and i == 0:
+        #    print('feats[0]:', flist)
         feats.append(flist)
     if debug:
-        print('to_feats: ', len(feats))
+        print('to_feats: ', row['docid'], 'feats:', len(feats))
     if use_numpy:
         return numpy.asarray(feats).astype('float')
     else:
         return feats
 
 def to_labels(df, labelname, labelencoder=None, encode=True):
+    if debug:
+        print('to_labels: ', labelname, ', encode: ', str(encode))
     #data = ast.literal_eval(df[labelname])
     labels = []
+
+    # Extract the labels from the dataframe
     for i, row in df.iterrows():
         flist = row[labelname]
+        #if debug: print('flist:', type(flist), str(flist))
         if type(flist) == str:
             flist = ast.literal_eval(flist)
         if debug and i == 0:
             print('labels[0]:', flist)
         labels.append(flist)
-    if encode:
+
+    # Normalize the rank values
+    if encode and labelname == 'event_ranks':
+        enc_labels = []
+        for rank_list in labels:
+            if type(rank_list) == str:
+                rank_list = ast.literal_eval(rank_list)
+            max_rank = float(numpy.amax(numpy.asarray(rank_list), axis=None))
+            if max_rank == 0:
+                print('WARNING: max rank is 0')
+                norm_ranks = rank_list # Don't normalize if they're all 0
+            else: # Normalize
+                norm_ranks = []
+                for rank in rank_list:
+                    norm_ranks.append(float(rank)/max_rank)
+            enc_labels.append(numpy.asarray(norm_ranks))
+        labels = enc_labels
+
+    # Encode other labels
+    elif encode:
         if labelencoder is None:
             labelencoder = create_labelencoder(labels)
         labels = df.apply(encode_labels(labels))
-    if debug:
-        print('to_labels:', labelname, 'encode:', encode, 'labels:', len(labels))
+    if debug: print('to_labels:', labelname, 'encode:', encode, 'labels:', len(labels))
     return labels, labelencoder
 
 def create_labelencoder(data, num=0):
     global labelencoder, onehotencoder, num_labels
-    print("create_labelencoder: data[0]: ", str(data[0]))
+    if debug: print("create_labelencoder: data[0]: ", str(data[0]))
     labelencoder = LabelEncoder()
     labelencoder.fit(data)
     num_labels = len(labelencoder.classes_)
@@ -120,6 +146,24 @@ def decode_all_labels(data, labenc=None):
         decoded_labels.append(labs)
     return decoded_labels
 
-def dummy_function(df):
+
+''' Put 0 features corresponding to the labels if no features are required for the model
+    (i.e. for random or mention order)
+'''
+def dummy_function(df, doc_level=False):
+    #print('dummy_function')
     df['feats'] = '0'
+    if not doc_level:
+        for i, row in df.iterrows():
+            fake_feats = []
+            event_list = etree.fromstring(row['events'])
+            if debug: print(row['docid'], 'dummy_function events:', type(event_list), etree.tostring(event_list))
+            if type(event_list) == str:
+                #event_list = eval(event_list)
+                event_list = ast.literal_eval(event_list)
+            if debug: print(row['docid'], 'dumm_function events len:', len(event_list))
+            for entry in event_list:
+                fake_feats.append(0)
+            df.at[i, 'feats'] = fake_feats
+            print('dummy_function:', row['docid'], 'feats:', len(fake_feats))
     return df

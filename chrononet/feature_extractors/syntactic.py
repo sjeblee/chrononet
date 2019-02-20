@@ -2,6 +2,8 @@
 
 import ast
 
+debug = False
+
 def check_feats(feats, seq, labels):
     if not len(feats) == len(labels):
         print('len mismatch:')
@@ -23,8 +25,9 @@ def sent_features(df):
         feats = sent2features(sent)
         check_feats(feats, seq_list, label_list)
         df.at[i, 'feats'] = feats
-        print('row', row['docid'], row['seqid'])
-        #print('syntactic features:', str(feats))
+        if debug:
+            print('row', row['docid'], row['seqid'])
+            print('syntactic features:', str(feats))
 
     return df
 

@@ -6,5 +6,7 @@ class ModelBase:
     model = None
 
 class ModelFactory:
+    requires_dim = False
+
     def get_model():
         return ModelBase()

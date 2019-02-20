@@ -85,6 +85,7 @@ class DataAdapter:
     use_gold_tags: True to use gold tags, False to use predicted event tags (NOT IMPLEMENTED)
     '''
     def to_order(self, doc_df, df_orig, use_gold_tags=True):
+        print('to_order')
         order_df = pandas.DataFrame(columns=data_scheme.order())
         for i, row in doc_df.iterrows():
             docid = row['docid']
@@ -96,28 +97,43 @@ class DataAdapter:
                 labels = ast.literal_eval(labels)
             seq_labels = list(zip(seq, labels))
 
-            # Reconstruct events from seq
-            elem = etree.Element('tag_node')
-            elem.text = self.to_xml(seq_labels)
-            events = []
-            for child in elem:
-                if child.tag == 'EVENT':
-                    events.append(child)
-
             # Create new row for the order df
             new_row = {}
             new_row['docid'] = docid
             new_row['text'] = row['text']
+            new_row['seq'] = row['seq']
+            new_row['seq_labels'] = row['seq_labels']
 
-            orig_row = df_orig.loc[df_orig['docid'] == docid]
+            orig_row = df_orig.loc[df_orig['docid'] == docid].iloc[0]
             new_row['diagnosis'] = orig_row['diagnosis']
-            new_row['events'] = events
 
             if use_gold_tags:
-                #event_tags = orig_row['tags']
-                new_row['event_ranks'] = orig_row['event_ranks'] # TODO: make sure these are in the right order?
+                #if self.debug: print(docid, 'orig_row[events]', str(orig_row['events']))
+                events_xml = etree.fromstring(str(orig_row['events']))
+                #if self.debug: print(docid, 'events_xml: ', etree.tostring(events_xml))
+                new_row['events'] = orig_row['events'] # Keep as xml node
+                event_ranks = orig_row['event_ranks']
+                if type(event_ranks) == str:
+                    event_ranks = ast.literal_eval(event_ranks)
+                if self.debug:
+                    #for e in events_xml:
+                    #    print(docid, 'to_order: event:', etree.tostring(e))
+                    print(docid, 'to_order: event_ranks:', type(event_ranks), str(event_ranks))
+                #if type(event_ranks) == str:
+                #    event_ranks = list(ast.literal_eval(event_ranks))
+                new_row['event_ranks'] = event_ranks # These will be in text order
             else:
+                # Reconstruct events from seq
                 print('ERROR: using pred sequences as events not implemented yet!')
+                xml_text = self.to_xml(seq_labels)
+                elem = data_util.load_xml_tags(xml_text, unwrap=False)
+                #if self.debug: print('elem:', etree.tostring(elem))
+                events = etree.fromstring()
+                for child in elem:
+                    if child.tag == 'EVENT':
+                        events.append(etree.tostring(child).decode('utf8'))
+                        if self.debug: print('added event:', etree.tostring(child).decode('utf8'))
+
                 # TODO: propagate gold ranks to pred events based on partial overlap
             order_df = order_df.append(new_row, ignore_index=True)
 
@@ -163,19 +179,8 @@ class DataAdapter:
     split_sents: NOT IMPLEMENTED YET
     '''
     def ann_to_seq(self, narr, ann, split_sents, ncrf=False):
-        print(type(ann))
-        #try:
+        #print(type(ann))
         ann_element = data_util.load_xml_tags(ann)
-        #ann = ann.decode('utf8')
-        #except AttributeError:
-        #    pass
-        #print('ann:', ann)
-        #ann_xml = etree.fromstring(ann)
-        #ann_text = self.fix_xml_tags(ann_xml.text) # Escape & signs that might have been unescaped
-        #if len(ann_text) > 830:
-        #    print(ann_text[820:])
-        #ann_element = etree.fromstring("<root>" + ann_text + "</root>")
-        #print('ann_element: ', etree.tostring(ann_element))
         if ncrf:
             narr_ref = narr.replace('\n', '$')
             if split_sents:
@@ -276,7 +281,7 @@ class DataAdapter:
        filename: optional, the xml file to add the sequences to. If blank, will create a new tree
        tag: the tag to use for new elements if creating a new tree
     '''
-    def seq_to_xml(self, df, filename=None, tag="narr_timeml", elementname="Record", id_name="record_id"):
+    def seq_to_xml(self, df, filename=None, tag="narr_timeml", elementname="Record", id_name="record_id", doc_level=False):
         if self.debug: print("seq_to_xml")
 
         tree = None
@@ -284,10 +289,10 @@ class DataAdapter:
         for i, row in df.iterrows():
             docid = row['docid']
             seq = row['seq']
-            if type(seq) == 'str':
+            if type(seq) == str:
                 seq = ast.literal_eval(seq)
             labels = row['seq_labels']
-            if type(labels) == 'str':
+            if type(labels) == str:
                 labels = ast.literal_eval(labels)
             seq_labels = list(zip(seq, labels))
             child = etree.SubElement(root, elementname)
@@ -309,7 +314,7 @@ class DataAdapter:
         prevlabel = OO
         in_elem = False
         for word, label in seq:
-            print(word, label)
+            #print(word, label)
             # Add xml tags if necessary
             if label == OO:
                 in_elem = False
