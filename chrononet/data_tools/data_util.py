@@ -6,6 +6,7 @@
 from lxml import etree
 from lxml.etree import tostring
 from itertools import chain
+from random import shuffle
 from sklearn import metrics
 import numpy
 import operator
@@ -67,12 +68,13 @@ def extract_ranks(events, event_list=None):
                 eventid = event.get('eid')
                 print('looking up eid', eventid)
                 rank = event_map[eventid]
-            if int(rank) == 0:
-                print('WARNING: rank is 0:', etree.tostring(event))
             if rank is None:
                 print('ERROR: no rank attribute found:', etree.tostring(event))
                 rank = 0
                 ranks.append(0)
+            if int(rank) == 0:
+                print('WARNING: rank is 0:', etree.tostring(event))
+
             else:
                 ranks.append(int(rank))
             if int(rank) == 0:
@@ -134,10 +136,46 @@ def fix_line_breaks(filename, rec_type):
 def fix_xml_tags(text):
     text = text.replace('&lt;EVENT&gt;', '<EVENT>').replace('&lt;/EVENT&gt;', '</EVENT>')
     text = text.replace('&lt;TIMEX3&gt;', '<TIMEX3>').replace('&lt;/TIMEX3&gt;', '</TIMEX3>')
+    text = text.replace('&lt;SIGNAL&gt;', '<SIGNAL>').replace('&lt;/SIGNAL&gt;', '</SIGNAL>')
     text = text.replace('&lt;TLINK', '<TLINK').replace('/&gt;', '/>')
     text = text.replace('" &gt;', '">').replace(' >', '>')
     text = text.replace('&', '&amp;') # escape any leftover and signs
     return text
+
+
+''' Shuffle events within the same rank value, produce one shuffled example for every in-order example
+'''
+def generate_permutations(ids, x, y):
+    new_ids = ids
+    new_x = x
+    new_y = y
+    for n in range(len(x)):
+        #rank_map = {}
+        doc_id = ids[n]
+        x_list = x[n]
+        y_list = y[n]
+        new_x_list = []
+        new_y_list = []
+        temp_list = list(zip(x_list, y_list))
+        shuffle(temp_list)
+        new_lists = [list(t) for t in zip(*temp_list)]
+        new_x_list = new_lists[0]
+        new_y_list = new_lists[1]
+        new_ids.append(doc_id)
+        new_x.append(new_x_list)
+        new_y.append(new_y_list)
+        #print('Shuffle entry:', str(new_y_list))
+
+    # Shuffle the final training list
+    temp_pairs = list(zip(new_ids, new_x, new_y))
+    shuffle(temp_pairs)
+    #print('shuffle temp pairs[0]:', str(temp_pairs[0]))
+    new_lists = [list(t) for t in zip(*temp_pairs)]
+    new_ids = new_lists[0]
+    new_x = new_lists[1]
+    new_y = new_lists[2]
+    #print('shuffle new_y[0]', str(new_y[0]))
+    return new_ids, new_x, new_y
 
 
 def load_xml_tags(ann, unwrap=True):

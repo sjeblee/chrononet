@@ -26,7 +26,8 @@ fe_map = {'relations': relations.extract_relations, 'syntactic': syntactic.sent_
 vector_feats = ['event_vectors']
 model_map = {'crf': CRFfactory, 'random': RandomOrderFactory, 'mention': MentionOrderFactory, 'neural': NeuralOrderFactory}
 metric_map = {'p': eval_metrics.precision, 'r': eval_metrics.recall, 'f1': eval_metrics.f1,
-              'mse': ordering_metrics.rank_mse, 'poa': ordering_metrics.rank_pairwise_accuracy}
+              'mse': ordering_metrics.rank_mse, 'poa': ordering_metrics.rank_pairwise_accuracy, 'tau': ordering_metrics.kendalls_tau,
+              'epr': ordering_metrics.epr}
 debug = True
 
 def main():
@@ -232,7 +233,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             should_encode = False
             use_numpy = False
         elif stage_name == 'ordering':
-            should_encode = True
+            should_encode = False
             use_numpy = False
         else:
             should_encode = True # Should we encode labels
@@ -258,6 +259,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         if stage_name == 'ordering':
             check_alignment(train_ids, train_X, train_Y)
             check_alignment(test_ids, test_X, test_Y)
+            #train_ids, train_X, train_Y = data_util.generate_permutations(train_ids, train_X, train_Y)
 
         # Ground truth model
         if modelname == 'ground_truth':
@@ -284,6 +286,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
 
         # Save results to dataframe
         test_feat_df = data_util.add_labels(test_feat_df, y_pred, labelname)
+        check_alignment(test_ids, test_Y, y_pred)
 
         if stage_name == 'sequence':
             y_pred = data_util.collapse_labels(y_pred)
@@ -316,10 +319,6 @@ def check_alignment(ids, X, Y):
 
 
 def save(model, modelfile, model_type):
-    #if self.model is None:
-    #    raise NoModelError(self)
-    #if not os.path.exists(self.directory):
-    #    os.mkdir(self.directory)
     if model_type == 'torch':
         torch.save(model, modelfile)
     elif model_type == 'sklearn':
@@ -329,8 +328,6 @@ def save(model, modelfile, model_type):
 
 
 def load(modelfile, model_type):
-    #if not os.path.exists(self.modelfile):
-    #    raise NoModelError(self)
     if model_type == 'torch':
         return torch.load(modelfile)
     elif model_type == 'sklearn':

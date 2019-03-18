@@ -4,8 +4,33 @@
 
 import math
 import numpy
+import scipy
 
 # Metric functions #########################
+
+def kendalls_tau(true_ranks, pred_ranks):
+    accuracies = []
+    for n in range(len(true_ranks)):
+        pr = pred_ranks[n]
+        tr = true_ranks[n]
+        print('tau: true:', tr)
+        print('tau: pred:', pr)
+        assert(len(pr) == len(tr))
+        pval = None
+        if len(tr) == 0:
+            tau = 0
+        elif len(tr) == 1:
+            tau = 1
+        else:
+            tau, pval = scipy.stats.kendalltau(tr, pr)
+            print('Kendalls tau: n=', n, 'tau:', tau, 'p-value:', pval)
+        accuracies.append(tau)
+    if len(accuracies) > 1:
+        acc = numpy.average(numpy.asarray(accuracies))
+    else:
+        acc = accuracies[0]
+    return acc
+
 
 ''' Calculate the mean squared error of the predicted ranks
 '''
@@ -37,13 +62,17 @@ def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.001):
         num_pairs = len(so) + len(se)
         so_correct = 0
         se_correct = 0
-        for pair in so:
-            if pr[pair[0]] < pr[pair[1]]:
-                so_correct += 1
-        for pair in se:
-            if math.fabs(pr[pair[0]] - pr[pair[1]]) <= eps:
-                se_correct += 1
-        accuracy = (so_correct + se_correct)/float(num_pairs)
+        if num_pairs == 0:
+            accuracy = 0
+            print('WARNING: no ranks for evaluation')
+        else:
+            for pair in so:
+                if pr[pair[0]] < pr[pair[1]]:
+                    so_correct += 1
+            for pair in se:
+                if math.fabs(pr[pair[0]] - pr[pair[1]]) <= eps:
+                    se_correct += 1
+            accuracy = (so_correct + se_correct)/float(num_pairs)
         accuracies.append(accuracy)
     if len(accuracies) > 1:
         acc = numpy.average(numpy.asarray(accuracies))
@@ -51,7 +80,26 @@ def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.001):
         acc = accuracies[0]
     return acc
 
+def epr(true_ranks, pred_ranks):
+    return (events_per_rank(true_ranks), events_per_rank(pred_ranks))
+
 # Utility functions ########################
+
+def events_per_rank(labels):
+    epr = []
+    for ranks in labels:
+        rank_to_num = {}
+        num = 0
+        for val in ranks:
+            if val not in rank_to_num:
+                rank_to_num[val] = 0
+            rank_to_num[val] += 1
+            num += 1
+        for key in rank_to_num.keys():
+            epr.append(rank_to_num[key])
+
+    avg_epr = numpy.average(numpy.asarray(epr))
+    return avg_epr
 
 
 ''' From the ranks, generate pairs of events with equal rank, and ordered ranks

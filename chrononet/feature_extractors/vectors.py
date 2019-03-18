@@ -34,10 +34,12 @@ def event_vectors(df, vec_model, flatten=False):
             event_text = event.text
             pol = event.get('polarity')
             pol_flag = 0
-            if pol.lower() == 'neg':
+            if pol is not None and pol.lower() == 'neg':
                 pol_flag = 1
-            flags = [1]
-            flags.append(pol_flag)
+            flags = [1] # target flag
+            flags.append(pol_flag) # polarity flag
+            position = float(span[0])/float(len(text))
+            flags.append(position) # position value
             #if debug: print('event_vector for:', event_text)
             vec = context_vector(vec_model, prev, event_text, next, flags=flags)
             if flatten:
@@ -77,7 +79,7 @@ def context_vector(vec_model, prev, target, next, max_len=10, lowercase=True, fl
     return vecs
 
 
-def vec_word(vec_model, word, flags=[0, 0], lowercase=True):
+def vec_word(vec_model, word, flags=[0, 0, -1], lowercase=True):
     if lowercase:
         word = word.lower()
     vec = get(word, vec_model)

@@ -6,7 +6,7 @@ import re
 import pandas
 
 from lxml import etree
-from xml.sax.saxutils import unescape
+#from xml.sax.saxutils import unescape
 
 # Local imports
 from data_tools import data_scheme, data_util
@@ -265,6 +265,41 @@ class DataAdapter:
         pass
 
     ############################
+
+    def add_ranks(self, xmltree, df, record_name='record_id'):
+        for child in xmltree.getroot():
+            docid = child.find(record_name).text
+            print(docid, 'write_output', df.loc[df['docid'] == docid].to_string())
+            row = df.loc[df['docid'] == docid].iloc[0] # There should only be one row if this is a doc-level df
+            # Get the events and ranks
+            events = row['events']
+            event_ranks = row['event_ranks']
+            if type(events) == str:
+                event_list = []
+                events = etree.fromstring(events)
+                for event_child in events:
+                    event_list.append(event_child)
+                    print(docid, 'event before:', etree.tostring(event_child))
+                events = event_list
+                #events = ast.literal_eval(events)
+            if type(event_ranks) == str:
+                event_ranks = ast.literal_eval(event_ranks)
+            print('events:', len(events), 'ranks:', len(event_ranks))
+            assert(len(events) == len(event_ranks))
+            rank_event_pairs = list(zip(event_ranks, events))
+
+            # Sort the events by rank
+            sorted_event_pairs = sorted(rank_event_pairs, key=lambda x: x[0])
+            eventlist_elem = etree.SubElement(child, 'event_list')
+            for event_pair in sorted_event_pairs:
+                #event = etree.fromstring(event_pair[1])
+                event = event_pair[1]
+                rank_val = event_pair[0]
+                print('rank:', str(rank_val), 'event:', etree.tostring(event))
+                event.set('rank', str(rank_val))
+                print(docid, 'event after', etree.tostring(event))
+                eventlist_elem.append(event)
+        return xmltree
 
     def closelabel(self, prevlabel, elem_text):
         t_labels = ['BT', 'IT']

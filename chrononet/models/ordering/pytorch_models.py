@@ -1,283 +1,21 @@
 #!/usr/bin/python3
 
 import numpy
+import random
 import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
 
+#from models.loss_functions import Kendall_Tau_Loss
+
 numpy.set_printoptions(threshold=numpy.inf)
 debug = True
 tdevice = 'cpu'
 use_cuda = torch.cuda.is_available()
 if use_cuda:
-    tdevice = torch.device('cuda:1')
-
-# GRU with GRU encoder, input: (conversations (1), utterances, words, embedding_dim)
-class GRU(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, dropout_p=0.1):
-        super(GRU_GRU, self).__init__()
-        self.hidden_size = hidden_size
-        self.input_size = input_size
-        #self.encoding_size = encoding_size
-        self.output_size = output_size
-        self.dropout = dropout_p
-        #self.gru0 = nn.GRU(input_size, int(encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
-        self.gru1 = nn.GRU(input_size, hidden_size, bidirectional=True, dropout=dropout_p, batch_first=True)
-        self.linear = nn.Linear(hidden_size*2, output_size)
-        self.softmax = nn.Softmax(dim=2)
-
-    ''' Input is a list of lists of numpy arrays
-    '''
-    def forward(self, input, X2=None):
-        # input expected as (events, words, embedding_dim)
-        encodings = []
-        hn = None
-        index = 0
-        extra_size = 0
-        for row in input:
-            # Create a tensor
-            uttXnp = numpy.asarray(row).astype('float')
-            uttX = torch.tensor(uttXnp, dtype=torch.float, device=tdevice)
-            uttX = uttX.view(1, -1, self.input_size) # should be (1, #words, input_dim)
-            #print('input tensor:', uttX)
-            encoding, hn = self.gru0(uttX, hn) # should be (1, #words, encoding_dim)
-            enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
-            #if debug: print('enc:', str(enc.size()), enc)
-
-            # Add other features
-            if X2 is not None:
-                x2_np = numpy.asarray([X2[index]]).astype('float')
-                x2_vec = torch.tensor(x2_np, dtype=torch.float, device=tdevice)
-                if debug: print('x2:', x2_vec.size())
-                extra_size = x2_vec.size()[0]
-                enc = torch.cat((enc, x2_vec), dim=0)
-            encodings.append(enc)
-            index += 1
-
-        conversation = torch.stack(encodings)
-        conversation = conversation.view(1, -1, self.encoding_size+extra_size) # Treat whole conversation as a batch
-        print('conversation:', conversation.size())
-        output, hn = self.gru1(conversation, None)
-        print('output:', output.size())
-        #out1 = self.linear(output)
-        out1 = self.softmax(self.linear(output))
-        print('final out:', out1.size(), out1)
-        return out1
-
-    def initHidden(self, N):
-        return torch.randn(1, N, self.hidden_size, device=tdevice).double()
-
-    ''' Creates and trains a recurrent neural network model. Supports SimpleRNN, LSTM, and GRU
-        X: a list of training data
-        Y: a list of training labels
-        WARNING: Currently you can't use the encoding layer and use_prev_labels at the same time
-    '''
-    def fit(self, X, Y, activation='relu', num_epochs=10, batch_size=1, loss_function='l1', X2=None):
-        start = time.time()
-
-        # Parameters
-        hidden_size = self.hidden_size
-        encoding_size = self.encoding_size
-        dropout = self.dropout
-        output_dim = self.output_size
-        learning_rate = 0.1
-        print_every = 100
-        #teacher_forcing_ratio = 0.9
-
-        print("hidden_size:", str(hidden_size), "dropout:", str(dropout), "epochs:", str(num_epochs))
-        print("encoding size:", str(encoding_size), "(0 means utterances are already encoded and input should be 3 dims)")
-
-        if batch_size > 1:
-            if type(X) is list and batch_size > 1:
-                X = numpy.asarray(X)
-            if type(Y) is list and batch_size > 1:
-                Y = numpy.asarray(Y)
-            X = X.astype('float')
-            Y = Y.astype('float')
-
-            num_examples = X.shape[0]
-            input_dim = X.shape[-1]
-            max_length = Y.shape[1]
-            #output_dim = Y.shape[-1]
-            print("X:", str(X.shape), "Y:", str(Y.shape))
-            #print("max_length: ", str(max_length))
-
-        else: # Leave X and Y as lists
-            num_examples = len(X)
-            if encoding_size > 0:
-                print("X 000:", str(type(X[0][0][0])), "Y 00:", str(type(Y[0][0])))
-                input_dim = X[0][0][0].shape[0]
-                #output_dim = Y[0][0].shape[0]
-            else:
-                input_dim = len(X[0][0])
-                #output_dim = len(Y[0][0])
-            print("X list:", str(len(X)), "Y list:", str(len(Y)))
-
-        if X2 is not None:
-            print("X2 list:", len(X2))
-
-        print("input_dim: ", str(input_dim))
-        print("output_dim: ", str(output_dim))
-
-        # Set up optimizer and loss function
-        optimizer = optim.Adam(self.parameters(), lr=learning_rate)
-        if loss_function == 'cosine':
-            criterion = nn.CosineEmbeddingLoss()
-        elif loss_function == 'crossentropy':
-            criterion = nn.CrossEntropyLoss()
-        elif loss_function == 'mse':
-            criterion = nn.MSELoss()
-        elif loss_function == 'l1':
-            criterion = nn.L1Loss()
-        else:
-            print("WARNING: need to add loss function!")
-
-        if use_cuda:
-            self = self.to(tdevice)
-            #criterion = criterion.cuda()
-
-        # Train the model
-        for epoch in range(num_epochs):
-            print("epoch", str(epoch))
-            i = 0
-            while (i+batch_size) < num_examples:
-                if i % print_every == 0:
-                    print("batch i=", str(i))
-
-                # Make sure the data is in the proper numpy array format
-                if batch_size == 1:
-                    batchXnp = X[i]
-                    batchYnp = Y[i]
-                    if debug: print("batchX len:", str(len(batchXnp)), "batchY len:", str(len(batchYnp)))
-                    batchX2 = None
-                    if X2 is not None:
-                        batchX2np = X2[i]
-                        if debug:
-                            print("batchX2:", len(batchX2np), batchX2np)
-                    #if type(batchXnp) is list:
-                    #    batchXnp = numpy.asarray(batchXnp)
-                    if type(batchYnp) is list:
-                        batchYnp = numpy.asarray(batchYnp)
-                    #print("batchX shape:", str(batchXnp.shape), "batchY shape;", str(batchYnp.shape))
-                    if debug: print("batchY shape:", str(batchYnp.shape))
-                else:
-                    batchXnp = X[i:i+batch_size]
-                    batchYnp = Y[i:i+batch_size]
-                    if X2 is not None:
-                        batchX2np = X2[i:i+batch_size]
-
-                if encoding_size > 0:
-                    batchX = batchXnp
-                    batchY = batchYnp
-                    if X2 is not None:
-                        batchX2 = batchX2np
-                    else:
-                        batchX2 = None
-
-                # Convert to tensors
-                #batchXnp = batchXnp.astype('float')
-                #    batchX = torch.cuda.FloatTensor(batchXnp)
-                batchYnp = batchYnp.astype('float')
-                batchY = torch.tensor(batchYnp, dtype=torch.float, device=tdevice)
-
-                #print("batchX size:", str(batchX.size()), "batchY size:", str(batchY.size()))
-                if debug: print("batchX[0]:", str(batchX[0]))
-                if debug: print("batchY size:", str(batchY.size()))
-
-                labels = batchY.view(batch_size, -1, output_dim)
-                max_length = labels.size(1)
-                if debug: print("max_length:", str(max_length))
-                #if debug: print("batchX:", str(batchX.size()), "batchY:", str(batchY.size()))
-
-                # Forward + Backward + Optimize
-                optimizer.zero_grad()  # zero the gradient buffer
-                loss = 0
-
-                if encoding_size > 0:
-                    outputs = self(batchX, batchX2).view(max_length, -1)
-                else:
-                    print('ERROR: Encoding size is 0 and I dont know what to do')
-                    #outputs = self(samples).view(max_length, -1)
-                #if debug: print("outputs:", str(outputs.size()))
-                if loss_function == 'crossentropy':
-                    for b in range(batch_size):
-                        true_labels = torch.zeros(max_length).long()
-                        if use_cuda:
-                            true_labels = true_labels.cuda()
-                        print('true_labels size:', str(true_labels.size()))
-                        print('labels[b]', str(len(labels[b])))
-                        for y in range(len(labels[b])):
-                            true_label = labels[b][y].data
-                            #print("true_label:", str(true_label.size()))
-                            true_index = torch.max(true_label, 0)[1].long()
-                            #print("true_index", str(true_index.size()))
-                            true_labels[y] = true_index[0]
-                        true_var = true_labels
-                        print("true_var", str(true_var.size()))
-                        loss = criterion(outputs, true_var)
-                        loss.backward()
-                        optimizer.step()
-                else:
-                    labels = labels.view(max_length, 1)
-
-                    loss = criterion(outputs, labels)
-                    loss.backward()
-                    optimizer.step()
-
-                if (i) % print_every == 0:
-                    if debug: print('outputs:', outputs.size(), 'labels:', labels.size())
-                    if debug: print('outputs:', outputs, 'labels:', labels)
-                    print('Epoch [%d/%d], Loss: %.4f' %(epoch, num_epochs, loss.data.item()))
-                i = i+batch_size
-
-                del batchX
-                del batchY
-        print("GRU_GRU training took", str(time.time()-start), "s")
-
-    def predict(self, testX, X2=None, batch_size=1, keep_list=True):
-        # Test the Model
-        print_every = 1000
-        pred = []
-        i = 0
-        length = len(testX)# .shape[0]
-        if debug: print("testX len:", str(len(testX)))
-        while i < length:
-            if i % print_every == 0:
-                if debug: print("test batch", str(i))
-            if (i+batch_size) > length:
-                batch_size = length-i
-            if keep_list:
-                if batch_size == 1:
-                    samples = testX[i]
-                    if X2 is not None:
-                        x2_batch = X2[i]
-                else:
-                    samples = testX[i:i+batch_size]
-                    if X2 is not None:
-                        x2_batch = X2[i:i+batch_size]
-                if debug: print("samples:", str(len(samples)))
-            else:
-                x_array = numpy.asarray(testX[i:i+batch_size]).astype('float')
-                if debug: print("test x_array:", str(x_array.shape))
-                samples = torch.tensor(x_array, dtype=torch.float, device=tdevice)
-
-            if X2 is not None:
-                outputs = self(samples, x2_batch)
-            else:
-                outputs = self(samples)
-            print("test outputs:", str(outputs.size()))
-            num_items = outputs.size()[1]
-            predicted = outputs.view(num_items).tolist()
-            #_, predicted = torch.max(outputs.data, -1) # TODO: fix this
-            print('predicted:', predicted)
-            pred.append(predicted)
-            if not keep_list:
-                del sample_tensor
-            i = i+batch_size
-        return pred
-
+    tdevice = torch.device('cuda:2')
 
 # GRU with GRU encoder, input: (conversations (1), utterances, words, embedding_dim)
 class GRU_GRU(nn.Module):
@@ -542,3 +280,815 @@ class GRU_GRU(nn.Module):
                 del sample_tensor
             i = i+batch_size
         return pred
+
+# Set to Sequence model for temporal ordering ##############################
+
+class SetToSequence_encoder(nn.Module):
+    def __init__(self, input_size, encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50):
+        super(SetToSequence_encoder, self).__init__()
+
+        self.read_cycles = read_cycles
+        self.input_size = input_size # word vector dim
+        self.encoding_size = encoding_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.dropout = dropout_p
+        self.gru0 = nn.GRU(self.input_size, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).double()
+        self.gru1 = nn.GRUCell(self.hidden_size, self.hidden_size).double() # encoder
+
+        # Attention calculations
+        self.bilinear = nn.Bilinear(self.encoding_size, self.hidden_size, 1).double()
+        self.softmax = nn.Softmax(dim=1).double()
+
+    ''' Input is a list of lists of numpy arrays
+    '''
+    def forward(self, input):
+        encodings = []
+        hn = None
+        index = 0
+
+        # Generate the event encodings
+        for row in input:
+            # Create a tensor
+            Xnp = numpy.asarray(row).astype('float64')
+            X = torch.tensor(Xnp, dtype=torch.float64, device=tdevice)
+            X = X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
+            #print('input tensor:', uttX)
+            encoding, hn = self.gru0(X, hn) # should be (1, #words, encoding_dim)
+            enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
+            #if debug: print('enc:', str(enc.size()), enc)
+            encodings.append(enc)
+            index += 1
+
+        mem_block = torch.stack(encodings)
+        mem_block = mem_block.view(-1, self.encoding_size) # Treat whole conversation as a batch (n, enc_size)
+        #print('mem_block:', mem_block.size())
+
+        # Feed input into the encoder
+        h_t = self.init_hidden()
+        for t in range(self.read_cycles):
+            # Calculate attention matrix
+            e_list = []
+            mem_size = mem_block.size(0)
+            for i in range(mem_size): # For each event encoding
+                e_ti = self.bilinear(mem_block[i], h_t.squeeze())
+                e_list.append(e_ti)
+            e_matrix = torch.stack(e_list).view(1, -1)
+            #print('e_matrix:', e_matrix.size())
+            attention_matrix = self.softmax(e_matrix).squeeze()
+            #print('attention:', attention_matrix.size(), attention_matrix)
+
+            if mem_size == 1:
+                s_t = torch.mul(mem_block, attention_matrix.item())
+            else:
+                sum_list = []
+                for i in range(mem_block.size(0)):
+                    sum_list.append(torch.mul(mem_block[i], attention_matrix[i].item()))
+                sum_matrix = torch.stack(sum_list)
+                #print('sum_matrix:', sum_matrix.size())
+                s_t = torch.sum(sum_matrix, dim=0)
+
+            #print('s_t:', s_t.size())
+            s_t = s_t.view(1, self.hidden_size) # Re-shape as a batch size of 1
+            #print('s_t view:', s_t.size())
+
+            # Feed the input into the encoder and update the hidden state
+            h_t = self.gru1(s_t, h_t)
+
+        return mem_block, h_t
+
+    def init_hidden(self):
+        return torch.zeros(1, self.hidden_size, dtype=torch.float64, device=tdevice)
+
+
+class SetToSequence_decoder(nn.Module):
+    def __init__(self, hidden_size, output_size, dropout_p=0.1, group_thresh=None):
+        super(SetToSequence_decoder, self).__init__()
+
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.dropout = dropout_p
+        self.gru = nn.GRUCell(hidden_size, hidden_size).double() # TODO: check this
+        self.group_thresh = group_thresh
+
+        # Attention calculations
+        self.bilinear = nn.Bilinear(self.hidden_size, self.hidden_size, 1).double()
+        self.softmax = nn.Softmax(dim=1).double()
+        self.logsoftmax = nn.LogSoftmax(dim=1).double()
+
+    ''' input: s_i of the previous predicted item
+        hidden: the previous hidden state
+    '''
+    def forward(self, input, h_t, mem_block, mask, train=False):
+
+        h_t = self.gru(input, h_t)
+
+        # Calculate attention matrix
+        e_list = []
+        for i in range(mem_block.size(0)): # For each event encoding
+            e_ti = self.bilinear(mem_block[i], h_t.squeeze())
+            e_list.append(e_ti)
+        e_matrix = torch.stack(e_list).squeeze()
+        #print('dec attention:', attention_matrix.size(), attention_matrix)
+
+        # Force the model to choose a new item that hasn't already been chosen
+        attention_matrix = self.softmax((e_matrix * mask).view(1, -1)).squeeze()
+        mask_matrix = attention_matrix * mask # Apply the mask
+        #print('e_mask:', e_mask)
+        #mask_matrix = self.logsoftmax(e_mask.view(1, -1)).squeeze()
+        print('dec softmax attention w/ mask:', mask_matrix.size(), mask_matrix)
+
+        # Select the item with the highest probability from attention
+        #print('argmax:', torch.argmax(mask_matrix, dim=0))
+        if self.group_thresh is not None:
+            #attention_matrix = mask_matrix # Use the mask version for loss calcuation
+
+            # Allow multiple events to be output at the same rank (prob threshold?)
+            max_tensor, index_tensor = torch.max(mask_matrix, dim=0)
+            target_index = int(index_tensor.item())
+            max_prob = max_tensor.item()
+            print('max_prob:', max_prob)
+            targets = []
+            n = float(mask_matrix.size(0))
+            for j in range(mask_matrix.size(0)):
+                if mask[j] > 0.0 or max_prob == 0.0:
+                    prob = mask_matrix[j]
+                    if ((max_prob - prob) <= (self.group_thresh/n)):
+                        targets.append(j)
+                        print('choosing item', j, 'with prob', mask_matrix[j].item())
+                        mask[j] = 0.0
+            #target = torch.stack(targets)
+            target = targets
+            attention_matrix = self.softmax(e_matrix.view(1, -1)).squeeze() # log probs for NLL loss
+        else:
+            attention_matrix = self.logsoftmax(e_matrix.view(1, -1)).squeeze() # log probs for NLL loss
+            target = torch.argmax(mask_matrix, dim=0)
+            target_index = int(target.item())
+            print('choosing item', target_index, 'with prob', mask_matrix[target_index].item())
+            if not train:
+                mask[target_index] = 0.0 # Set the mask so the same event won't be output again
+        #print('new mask:', mask)
+        #x_i = mem_block[target_index]
+
+        return target, h_t, mask, attention_matrix
+
+
+class SetToSequence:
+
+    def __init__(self, input_size, encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, group_thresh=None):
+        self.encoder = SetToSequence_encoder(input_size, encoding_size, hidden_size, output_size, dropout_p, read_cycles)
+        self.decoder = SetToSequence_decoder(hidden_size, output_size, dropout_p, group_thresh)
+        self.group_thresh = group_thresh
+
+    ''' Creates and trains a recurrent neural network model. Supports SimpleRNN, LSTM, and GRU
+        X: a list of training data
+        Y: a list of training labels
+        WARNING: Currently you can't use the encoding layer and use_prev_labels at the same time
+    '''
+    def fit(self, X, Y, activation='relu', num_epochs=10, batch_size=1, loss_function='mse'):
+        start = time.time()
+
+        # Parameters
+        hidden_size = self.encoder.hidden_size
+        encoding_size = self.encoder.encoding_size
+        dropout = self.encoder.dropout
+        output_dim = self.decoder.output_size
+        learning_rate = 0.01
+        print_every = 100
+        teacher_forcing_ratio = 0.9
+
+        print("hidden_size:", str(hidden_size), "dropout:", str(dropout), "epochs:", str(num_epochs))
+        print("encoding size:", str(encoding_size))
+
+        # Set up optimizer and loss function
+        encoder_optimizer = optim.Adam(self.encoder.parameters(), lr=learning_rate)
+        decoder_optimizer = optim.Adam(self.decoder.parameters(), lr=learning_rate)
+
+        # Loss function
+        #criterion = nn.MSELoss()
+        if self.group_thresh is not None:
+            criterion = nn.BCEWithLogitsLoss()
+        else:
+            criterion = nn.NLLLoss()
+
+        if use_cuda:
+            self.encoder = self.encoder.to(tdevice)
+            self.decoder = self.decoder.to(tdevice)
+
+        num_examples = len(X)
+        print("X 000:", str(type(X[0][0][0])), "Y 00:", str(type(Y[0][0])))
+        input_dim = X[0][0][0].shape[0]
+        print("X list:", str(len(X)), "Y list:", str(len(Y)))
+
+        print("input_dim: ", str(input_dim))
+        print("output_dim: ", str(output_dim))
+
+        # Train the model
+        for epoch in range(num_epochs):
+            print("epoch", str(epoch))
+            i = 0
+            while (i < num_examples):
+                batchXnp = X[i]
+                batchYnp = Y[i]
+                #if debug: print("batchX len:", str(len(batchXnp)), "batchY len:", str(len(batchYnp)))
+                if type(batchYnp) is list:
+                    batchYnp = numpy.asarray(batchYnp)
+
+                batchYnp = batchYnp.astype('float64')
+                batchY = torch.tensor(batchYnp, dtype=torch.float64, device=tdevice, requires_grad=True)
+
+                #print("batchX size:", str(batchX.size()), "batchY size:", str(batchY.size()))
+                #if debug: print("batchX[0]:", str(batchXnp[0]))
+                #if debug: print("batchY size:", str(batchY.size()))
+
+                labels = batchY.view(1, -1, output_dim)
+                seq_length = labels.size(1)
+                #input_length = self.encoder.read_cycles
+                if debug: print("seq_length:", str(seq_length))
+
+                encoder_optimizer.zero_grad()
+                decoder_optimizer.zero_grad()
+                loss = 0
+
+                # Run the encoder
+                #encoder_hidden = self.encoder.init_hidden()
+                mem_block, encoder_hidden = self.encoder(batchXnp)
+
+                # Run the decoder
+                decoder_hidden = encoder_hidden
+                use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+
+                # Initialize the prediction
+                x_i = torch.zeros(self.encoder.encoding_size, dtype=torch.float64, device=tdevice)
+                output_indices = []
+                output_probs = []
+                correct_ranks = labels.squeeze()
+                flatten = True
+                if self.group_thresh is not None:
+                    flatten = False
+                correct_indices = ranks_to_indices(correct_ranks.tolist(), flatten)
+                num_timesteps = len(correct_indices)
+                if i==0: print('correct_indices:', correct_indices)
+                done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
+
+                #di = 0
+                #while torch.max(done_mask).item() > 0.0:
+                for di in range(seq_length):
+                    # Run until we've picked all the items
+                    index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask, True)
+                    print('di:', di, 'mask:', done_mask)
+
+                    # Select multiple items at each timestep
+                    if self.group_thresh is not None:
+                        x_i_vecs = []
+                        #if use_teacher_forcing:
+                        #    selected = correct_indices[di]
+                        #else:
+                        selected = index
+                        for ind in selected:
+                            vec = mem_block[ind]
+                            x_i_vecs.append(vec)
+                        x_i = torch.mean(torch.stack(x_i_vecs), dim=0) # average the selected items
+
+                    # Only select one item at each timestep
+                    else:
+                        index = int(index.item())
+                        x_i = mem_block[index]
+                        x_correct = mem_block[correct_indices[di]]
+                        # Teacher forcing for training
+                        if use_teacher_forcing:
+                            x_i = x_correct
+
+                    output_indices.append(index)
+                    output_probs.append(log_probs)
+
+                    '''
+                    if self.group_thresh is not None:
+                        target_tensor = torch.zeros(seq_length, dtype=torch.float64, device=tdevice, requires_grad=False)
+                        if di < len(correct_indices):
+                            for val in correct_indices[di]:
+                                target_tensor[val] = 1.0
+                        # If num of predicted timesteps is not the same as target tensor, pad one of them
+                        print('output pred:', log_probs.size(), 'target:', target_tensor.size())
+                        loss += criterion(log_probs.view(1, -1), target_tensor.view(1, -1))
+                    '''
+                    di += 1
+
+                output_probs = torch.stack(output_probs).view(-1, seq_length)
+
+                if self.group_thresh is not None:
+                    target_tensor = torch.zeros(num_timesteps, seq_length, dtype=torch.float64, device=tdevice, requires_grad=False)
+                    for timestep in range(len(correct_indices)):
+                        indices = correct_indices[timestep]
+                        for val in indices:
+                            target_tensor[timestep][val] = 1.0
+                    # output_probs: pred_timesteps * seq_length, target: num_timesteps * seq_length
+                    print('pred:', output_probs.size(), 'target:', target_tensor.size())
+                    # If num of predicted timesteps is not the same as target tensor, pad one of them
+                    if output_probs.size(0) != target_tensor.size(0):
+                        max_size = max(output_probs.size(0), target_tensor.size(0))
+                        pad_size = max_size - output_probs.size(0)
+                        if pad_size > 0:
+                            pad_tensor = torch.zeros(pad_size, seq_length, dtype=torch.float64, device=tdevice)
+                            output_probs = torch.cat((output_probs, pad_tensor))
+                        pad_size = max_size - target_tensor.size(0)
+                        if pad_size > 0:
+                            pad_tensor = torch.zeros(pad_size, seq_length, dtype=torch.float64, device=tdevice)
+                            target_tensor = torch.cat((target_tensor, pad_tensor))
+                    print('padded pred:', output_probs.size(), 'target:', target_tensor.size())
+                    loss = criterion(output_probs, target_tensor)
+                else:
+                    #if self.group_thresh is None:
+                    loss = criterion(output_probs, torch.tensor(correct_indices, dtype=torch.long, device=tdevice, requires_grad=False))
+                output_ranks = indices_to_ranks(output_indices)
+                if i==0: print('output_ranks:', output_ranks)
+                #loss = criterion(torch.tensor(output_ranks, dtype=torch.float, device=tdevice, requires_grad=True), correct_ranks)
+                print('loss:', loss.item())
+
+                loss.backward()
+                encoder_optimizer.step()
+                decoder_optimizer.step()
+
+                #return loss.item() / target_length
+                if (i) % print_every == 0:
+                    print('Epoch [%d/%d], Loss: %.4f' %(epoch, num_epochs, loss.item()))
+                i += 1
+        print('training took', time.time()-start, 's')
+
+    def predict(self, testX, batch_size=1):
+        print("X 000:", str(type(testX[0][0][0])))
+        print("X list:", str(len(testX)))
+        outputs = []
+
+        # Run the model
+        for i in range(len(testX)):
+            batchXnp = testX[i]
+            #if debug: print("batchX len:", len(batchXnp))
+
+            #print("batchX size:", str(batchX.size()), "batchY size:", str(batchY.size()))
+            #if debug: print("testX[0]:", str(batchXnp[0]))
+            seq_length = len(batchXnp)
+            #input_length = self.encoder.read_cycles
+            #if debug: print("test seq_length:", str(seq_length))
+
+            # Run the encoder
+            mem_block, encoder_hidden = self.encoder(batchXnp)
+
+            # Run the decoder
+            decoder_hidden = encoder_hidden
+
+            # Initialize the prediction
+            x_i = torch.zeros(self.encoder.encoding_size, dtype=torch.float64, device=tdevice)
+            output_indices = []
+            done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
+
+            # Run until we've picked all the items
+            di = 0
+            while torch.max(done_mask).item() > 0.0:
+                index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask)
+
+                # Select multiple items at each timestep
+                if self.group_thresh is not None:
+                    x_i_vecs = []
+                    selected = index
+                    for ind in selected:
+                        vec = mem_block[ind]
+                        x_i_vecs.append(vec)
+                    x_i = torch.mean(torch.stack(x_i_vecs), dim=0) # average the selected items
+
+                # Only select one item at each timestep
+                else:
+                    index = int(index.item())
+                    x_i = mem_block[index]
+
+                output_indices.append(index)
+                #output_probs.append(log_probs)
+                di += 1
+
+            output_ranks = indices_to_ranks(output_indices)
+            print('output_ranks:', output_ranks)
+            outputs.append(output_ranks)
+        return outputs
+
+
+# Set2Seq GROUP #####################
+
+# Set2seq linear w/ group transition prediction
+class SetToSequenceGroup_decoder(nn.Module):
+    def __init__(self, hidden_size, output_size, dropout_p=0.1, group_thresh=None):
+        super(SetToSequenceGroup_decoder, self).__init__()
+
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.dropout = dropout_p
+        self.gru = nn.GRUCell(hidden_size, hidden_size).double() # TODO: check this
+        self.group_thresh = group_thresh
+
+        # Attention calculations
+        self.bilinear = nn.Bilinear(self.hidden_size, self.hidden_size, 1).double()
+        self.softmax = nn.Softmax(dim=1).double()
+        self.logsoftmax = nn.LogSoftmax(dim=1).double()
+
+    ''' input: s_i of the previous predicted item
+        hidden: the previous hidden state
+    '''
+    def forward(self, input, h_t, mem_block, mask, train=False):
+        h_t = self.gru(input, h_t)
+
+        # Calculate attention matrix
+        e_list = []
+        for i in range(mem_block.size(0)): # For each event encoding
+            e_ti = self.bilinear(mem_block[i], h_t.squeeze())
+            e_list.append(e_ti)
+        e_matrix = torch.stack(e_list).squeeze()
+        #print('dec attention:', attention_matrix.size(), attention_matrix)
+
+        # Force the model to choose a new item that hasn't already been chosen
+        attention_matrix = self.softmax(e_matrix.view(1, -1)).squeeze()
+        if train:
+            mask_matrix = attention_matrix
+        else:
+            mask_matrix = attention_matrix * mask # Apply the mask
+        #print('dec softmax attention w/ mask:', mask_matrix.size(), mask_matrix)
+
+        # Select the item with the highest probability from attention
+        #attention_matrix = self.logsoftmax(e_matrix.view(1, -1)).squeeze() # log probs for NLL loss
+        target = torch.argmax(mask_matrix, dim=0)
+        target_index = int(target.item())
+        if mask_matrix.dim() == 0:
+            prob = mask_matrix.item()
+        else:
+            prob = mask_matrix[target_index].item()
+        print('highest item', target_index, 'with prob', prob)
+        #mask[target_index] = 0.0 # Set the mask so the same event won't be output again
+        #print('new mask:', mask)
+
+        return target, h_t, mask, mask_matrix
+
+
+class SetToSequenceGroup_transition(nn.Module):
+
+    def __init__(self, hidden_size, dropout_p):
+        super(SetToSequenceGroup_transition, self).__init__()
+        self.hidden_size = hidden_size
+        self.transition_gru = nn.GRU(self.hidden_size, self.hidden_size, bidirectional=False, dropout=dropout_p, batch_first=True).double()
+        #self.fc1 = nn.Linear(self.hidden_size, self.hidden_size).double()
+        #self.relu1 = nn.ReLU().double()
+        self.dout = nn.Dropout(dropout_p).double()
+        self.transition = nn.Linear(self.hidden_size, 1).double()
+        self.sigmoid = nn.Sigmoid().double()
+        #self.softmax = nn.Softmax(dim=2).double()
+
+    def forward(self, input, h_t):
+        _out, ht = self.transition_gru(input, h_t)
+        #lin_out = self.relu1(self.fc1(ht))
+        prob = self.sigmoid(self.transition(self.dout(ht)))
+        #prob = self.transition(ht)
+        #prob = self.softmax(self.transition(ht))
+        return prob
+
+
+class SetToSequenceGroup:
+
+    def __init__(self, input_size, encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, group_thresh=None):
+        self.encoder = SetToSequence_encoder(input_size, encoding_size, hidden_size, output_size, dropout_p, read_cycles)
+        self.decoder = SetToSequenceGroup_decoder(hidden_size, output_size, dropout_p, group_thresh)
+        self.group_thresh = group_thresh
+        self.hidden_size = hidden_size
+
+        # Group transition
+        #self.group = SetToSequenceGroup_transition(hidden_size, dropout_p)
+
+        #self.transition_prob = nn.Bilinear(self.hidden_size, self.hidden_size, 1).double()
+
+    ''' Creates and trains a recurrent neural network model. Supports SimpleRNN, LSTM, and GRU
+        X: a list of training data
+        Y: a list of training labels
+        WARNING: Currently you can't use the encoding layer and use_prev_labels at the same time
+    '''
+    def fit(self, X, Y, activation='relu', num_epochs=10, batch_size=1, loss_function='mse'):
+        start = time.time()
+
+        # Parameters
+        hidden_size = self.encoder.hidden_size
+        encoding_size = self.encoder.encoding_size
+        dropout = self.encoder.dropout
+        output_dim = self.decoder.output_size
+        learning_rate = 0.01
+        group_learning_rate = 0.001
+        print_every = 100
+        teacher_forcing_ratio = 0.9
+
+        print("hidden_size:", str(hidden_size), "dropout:", str(dropout), "epochs:", str(num_epochs))
+        print("encoding size:", str(encoding_size))
+
+        # Set up optimizer and loss function
+        encoder_optimizer = optim.Adam(self.encoder.parameters(), lr=learning_rate)
+        decoder_optimizer = optim.Adam(self.decoder.parameters(), lr=learning_rate)
+        #group_optimizer = optim.Adam(self.group.parameters(), lr=group_learning_rate)
+
+        # Loss function
+        #criterion = nn.KLDivLoss()
+        criterion = nn.BCEWithLogitsLoss()
+        #group_criterion = nn.BCELoss()
+        #criterion = nn.NLLLoss()
+
+        if use_cuda:
+            self.encoder = self.encoder.to(tdevice)
+            self.decoder = self.decoder.to(tdevice)
+            #self.group = self.group.to(tdevice)
+
+        num_examples = len(X)
+        print("X 000:", str(type(X[0][0][0])), "Y 00:", str(type(Y[0][0])))
+        input_dim = X[0][0][0].shape[0]
+        print("X list:", str(len(X)), "Y list:", str(len(Y)))
+
+        print("input_dim: ", str(input_dim))
+        print("output_dim: ", str(output_dim))
+
+        # Train the model
+        for epoch in range(num_epochs):
+            print("epoch", str(epoch))
+            i = 0
+            while (i < num_examples):
+                batchXnp = X[i]
+                batchYnp = Y[i]
+                #if debug: print("batchX len:", str(len(batchXnp)), "batchY len:", str(len(batchYnp)))
+                if type(batchYnp) is list:
+                    batchYnp = numpy.asarray(batchYnp)
+
+                batchYnp = batchYnp.astype('float64')
+                batchY = torch.tensor(batchYnp, dtype=torch.float64, device=tdevice, requires_grad=True)
+
+                #print("batchX size:", str(batchX.size()), "batchY size:", str(batchY.size()))
+                #if debug: print("batchX[0]:", str(batchXnp[0]))
+                #if debug: print("batchY size:", str(batchY.size()))
+
+                labels = batchY.view(1, -1, output_dim)
+                seq_length = labels.size(1)
+                #input_length = self.encoder.read_cycles
+                #if debug: print("seq_length:", str(seq_length))
+
+                encoder_optimizer.zero_grad()
+                decoder_optimizer.zero_grad()
+                #group_optimizer.zero_grad()
+                loss = 0
+
+                # Run the encoder
+                mem_block, encoder_hidden = self.encoder(batchXnp)
+
+                # Run the decoder
+                decoder_hidden = encoder_hidden
+                use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+
+                # Initialize the prediction
+                x_i = torch.zeros(self.encoder.encoding_size, dtype=torch.float64, device=tdevice)
+                output_indices = []
+                output_probs = []
+                correct_ranks = labels.squeeze()
+                flatten = True
+                if self.group_thresh is not None:
+                    flatten = False
+                correct_indices = ranks_to_indices(correct_ranks.tolist(), flatten)
+                num_timesteps = len(correct_indices)
+                if i==0: print('correct_indices:', correct_indices)
+                done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
+                current_rank = []
+                x_list = []
+
+                # Run until we've picked all the items
+                #di = 0
+                #while torch.max(done_mask).item() > 0.0:
+                output_probs = []
+                target_probs = []
+                for di in range(num_timesteps):
+                    index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask, train=True)
+                    #print('di:', di, 'mask:', done_mask)
+                    output_probs.append(log_probs)
+
+                    # Select multiple items at each timestep
+                    index = int(index.item())
+                    x_i = mem_block[index]
+                    x_correct = mem_block[correct_indices[di]]
+                    # Teacher forcing for training
+                    if use_teacher_forcing:
+                        x_i = x_correct
+
+                    x_i = x_i.view(-1, encoding_size)
+                    if x_i.size(0) > 1:
+                        x_i = torch.mean(x_i, dim=0)
+                    print('x_i:', x_i.size())
+
+                    x_list.append(x_i)
+
+                    # Create the target prob distribution
+                    target_tensor = torch.zeros(seq_length, dtype=torch.float64, device=tdevice, requires_grad=False)
+                    if di < len(correct_indices):
+                        for val in correct_indices[di]:
+                            target_tensor[val] = 1.0
+                    target_probs.append(target_tensor.view(1, seq_length))
+                    print(di, 'target:', target_tensor)
+                    print(di, 'predic:', log_probs)
+
+                    '''
+                    trans_loss = 0
+                    x_tensor = torch.stack(x_list).clone().detach() # Detach from the previous graph so we can optimize separately
+
+                    # Group transition
+
+                    group_prob = self.group(x_tensor.unsqueeze(0), decoder_hidden.view(1, 1, -1)).squeeze()
+                    print('group transition prob:', group_prob)
+                    should_transition = torch.zeros(1, dtype=torch.float64, device=tdevice, requires_grad=False)
+
+                    if (di > 0) and correct_ranks[correct_indices[di]].item() == correct_ranks[correct_indices[di-1]].item():
+                        should_transition[0] = 0.0
+                    else:
+                        should_transition[0] = 1.0
+                    print('should_transition:', should_transition)
+
+
+                    #if torch.argmax(group_prob).item() == 1:
+                    if group_prob.item() > 0.5: # if prob is high or this is the last item
+                        if len(current_rank) > 0:
+                            output_indices.append(current_rank)
+                        current_rank = []
+                    current_rank.append(index)
+
+                    trans_loss = group_criterion(group_prob, should_transition)
+                    print('trans loss:', trans_loss.item())
+                    trans_loss.backward(retain_graph=True)
+                    group_optimizer.step()
+                    output_probs.append(log_probs)
+                    '''
+
+                    di += 1
+
+                output_indices.append(current_rank)
+                output_ranks = indices_to_ranks(output_indices)
+                output_tensor = torch.stack(output_probs).view(-1, seq_length)
+                target_tensor = torch.stack(target_probs).view(-1, seq_length)
+
+                loss = criterion(output_tensor, target_tensor)
+                if i==0: print('output_ranks:', output_ranks)
+                #loss = criterion(torch.tensor(output_ranks, dtype=torch.float, device=tdevice, requires_grad=True), correct_ranks)
+                print('loss:', loss.item())
+
+                loss.backward()
+                encoder_optimizer.step()
+                decoder_optimizer.step()
+
+                #return loss.item() / target_length
+                if (i) % print_every == 0:
+                    print('Epoch [%d/%d], Loss: %.4f' %(epoch, num_epochs, loss.item()))
+                i += 1
+        print('training took', time.time()-start, 's')
+
+    def predict(self, testX, batch_size=1):
+        print("X 000:", str(type(testX[0][0][0])))
+        print("X list:", str(len(testX)))
+        outputs = []
+
+        # Run the model
+        for i in range(len(testX)):
+            batchXnp = testX[i]
+            #if debug: print("batchX len:", len(batchXnp))
+
+            #print("batchX size:", str(batchX.size()), "batchY size:", str(batchY.size()))
+            if debug: print("testX[0]:", str(batchXnp[0]))
+            seq_length = len(batchXnp)
+            #input_length = self.encoder.read_cycles
+            if debug: print("test seq_length:", str(seq_length))
+
+            # Run the encoder
+            mem_block, encoder_hidden = self.encoder(batchXnp)
+
+            # Run the decoder
+            decoder_hidden = encoder_hidden
+
+            # Initialize the prediction
+            x_i = torch.zeros(self.encoder.encoding_size, dtype=torch.float64, device=tdevice)
+            output_indices = []
+            done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
+
+            # Run until we've picked all the items
+            #current_rank = []
+            #x_list = []
+
+            # Run until we've picked all the items
+            di = 0
+            while torch.max(done_mask).item() > 0.0:
+                index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask)
+                print('test di:', di, 'mask:', done_mask)
+
+                # Select multiple items at each timestep
+                index = int(index.item())
+
+                # Allow multiple events to be output at the same rank (prob threshold?)
+                max_tensor, index_tensor = torch.max(log_probs, dim=0)
+                #target_index = int(index_tensor.item())
+                max_prob = max_tensor.item()
+                print('max_prob:', max_prob)
+                targets = []
+                n = float(log_probs.size(0))
+                print('n:', n)
+                for j in range(log_probs.size(0)):
+                    if done_mask[j] > 0.0 or max_prob == 0.0:
+                        prob = log_probs[j]
+                        if ((max_prob - prob) <= (self.group_thresh/n)):
+                            targets.append(j)
+                            print('choosing item', j, 'with prob', log_probs[j].item())
+                            done_mask[j] = 0.0
+                output_indices.append(targets)
+
+                xi_list = []
+                print('targets:', len(targets))
+                for ti in targets:
+                    x_i = mem_block[ti]
+                    xi_list.append(x_i)
+                if x_i.size(0) > 1:
+                    x_i = torch.mean(torch.stack(xi_list), dim=0)
+                print('test x_i:', x_i.size())
+
+                # Group transition
+                '''
+                x_tensor = torch.stack(x_list)
+                group_prob = self.group(x_tensor.unsqueeze(0), decoder_hidden.view(1, 1, -1)).squeeze()
+                print('group transition prob:', group_prob)
+
+                #if torch.argmax(group_prob).item() == 1: # if prob is high or this is the last item
+                if group_prob.item() > 0.5:
+                    if len(current_rank) > 0:
+                        output_indices.append(current_rank)
+                    current_rank = []
+                current_rank.append(index)
+                '''
+
+                di += 1
+
+            #output_indices.append(current_rank)
+            output_ranks = indices_to_ranks(output_indices)
+            print('output_ranks:', output_ranks)
+            outputs.append(output_ranks)
+        return outputs
+
+
+''' Ranks should be a list of integers, NOT scaled
+'''
+def ranks_to_indices(ranks, flatten=True):
+    # Given a list of n items, each with a corresponding rank
+    # For now, rank them sequentially even if they have the same rank
+    #print('ranks:', ranks)
+    max_rank = int(numpy.max(numpy.asarray(ranks)))
+    print('ranks_to_indices: max rank:', max_rank)
+    indices_multiple = [None] * (max_rank+1)
+
+    if type(ranks) == float:
+        num_ranks = 1
+        ranks = [ranks]
+    else:
+        num_ranks = len(ranks)
+
+    for i in range(num_ranks):
+        rank = int(ranks[i])
+        #print('rank:', rank, 'index:', i)
+        if indices_multiple[rank] is None:
+            indices_multiple[rank] = []
+        indices_multiple[rank].append(i)
+    indices_multiple = [x for x in indices_multiple if x is not None] # Filter out none entries
+    print('indices_multiple:', indices_multiple)
+
+    if flatten:
+        indices = []
+        for index_list in indices_multiple:
+            if index_list is not None:
+                for item in index_list:
+                    indices.append(item)
+        return indices
+    else:
+        return indices_multiple
+
+
+''' For now, indices is a single list of integers
+'''
+def indices_to_ranks(indices):
+    #max_index = int(numpy.max(numpy.asarray(indices)))
+    if type(indices) == float:
+        num_indices = 1
+    else:
+        if type(indices[0]) is list:
+            num_indices = 0
+            for sub in indices:
+                num_indices += len(sub)
+        else:
+            num_indices = len(indices)
+
+    print('indices_to_ranks:', num_indices, ':', indices)
+    #print('num_indices:', num_indices)
+    ranks = [None]*(num_indices)
+    for i in range(len(indices)):
+        if type(indices[i]) is list: # Handle multiple items at the same rank
+            for item in indices[i]:
+                ranks[int(item)] = i
+        else:
+            ranks[int(indices[i])] = i
+    return ranks
