@@ -100,12 +100,14 @@ class DataAdapter:
             # Create new row for the order df
             new_row = {}
             new_row['docid'] = docid
-            new_row['text'] = row['text']
             new_row['seq'] = row['seq']
             new_row['seq_labels'] = row['seq_labels']
 
             orig_row = df_orig.loc[df_orig['docid'] == docid].iloc[0]
             new_row['diagnosis'] = orig_row['diagnosis']
+            new_row['tags'] = orig_row['tags']
+            new_row['text'] = orig_row['text']
+            new_row['dct'] = orig_row['dct']
 
             if use_gold_tags:
                 #if self.debug: print(docid, 'orig_row[events]', str(orig_row['events']))
@@ -180,7 +182,7 @@ class DataAdapter:
     '''
     def ann_to_seq(self, narr, ann, split_sents, ncrf=False):
         #print(type(ann))
-        ann_element = data_util.load_xml_tags(ann)
+        ann_element = data_util.load_xml_tags(ann, decode=False, unwrap=True)
         if ncrf:
             narr_ref = narr.replace('\n', '$')
             if split_sents:
@@ -279,7 +281,7 @@ class DataAdapter:
                 events = etree.fromstring(events)
                 for event_child in events:
                     event_list.append(event_child)
-                    print(docid, 'event before:', etree.tostring(event_child))
+                    #print(docid, 'event before:', etree.tostring(event_child))
                 events = event_list
                 #events = ast.literal_eval(events)
             if type(event_ranks) == str:
@@ -295,9 +297,8 @@ class DataAdapter:
                 #event = etree.fromstring(event_pair[1])
                 event = event_pair[1]
                 rank_val = event_pair[0]
-                print('rank:', str(rank_val), 'event:', etree.tostring(event))
+                print(docid, 'true:', event.get('rank'), 'pred:', rank_val, 'event:', event.text)
                 event.set('rank', str(rank_val))
-                print(docid, 'event after', etree.tostring(event))
                 eventlist_elem.append(event)
         return xmltree
 

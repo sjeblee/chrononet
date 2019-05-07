@@ -6,6 +6,7 @@
 from lxml import etree
 from lxml.etree import tostring
 from itertools import chain
+from nltk.tokenize import wordpunct_tokenize
 from random import shuffle
 from sklearn import metrics
 import numpy
@@ -27,6 +28,30 @@ def add_labels(df, labels, labelname):
         df.at[i, labelname] = labels[i]
     return df
 
+def add_time_ids(event_elem, tag_elem):
+    time_map = {}
+    for tlink in tag_elem.findall('TLINK'):
+        eventid = None
+        timeid = None
+        if 'eventID' in tlink.attrib and 'relatedToTime' in tlink.attrib:
+            eventid = tlink.get('eventID')
+            timeid = tlink.get('relatedToTime')
+        elif 'timeID' in tlink.attrib and 'relatedToEventID' in tlink.attrib:
+            eventid = tlink.get('relatedToEventID')
+            timeid = tlink.get('timeID')
+        if timeid is not None and eventid is not None:
+            if eventid not in time_map:
+                time_map[eventid] = []
+            time_map[eventid].append(timeid)
+
+    for event in event_elem:
+        eid = event.get('eid')
+        time_ids = time_map[eid]
+        if time_ids is not None:
+            tid_string = ','.join(time_ids)
+            event.set('relatedToTime', tid_string)
+    return event_elem
+
 def create_df(df):
     return pandas.DataFrame(columns=['ID'])
 
@@ -38,8 +63,8 @@ def collapse_labels(labels):
             flat_labels.append(item)
     return flat_labels
 
-def extract_ranks(events, event_list=None):
-    elem = load_xml_tags(events)
+def extract_ranks(events, event_list=None, allow_empty=False):
+    elem = load_xml_tags(events, decode=False)
     ranks = []
     event_map = {}
     if debug: print('extract_ranks: events:', type(events))# 'elem:', etree.tostring(elem))
@@ -54,6 +79,8 @@ def extract_ranks(events, event_list=None):
                 if rank is None:
                     print('ERROR: no rank attribute found:', etree.tostring(event))
                     rank = 0
+                    if not allow_empty:
+                        exit(1)
                 event_map[id] = rank
 
     event_count = 0
@@ -71,14 +98,15 @@ def extract_ranks(events, event_list=None):
             if rank is None:
                 print('ERROR: no rank attribute found:', etree.tostring(event))
                 rank = 0
-                ranks.append(0)
-            if int(rank) == 0:
-                print('WARNING: rank is 0:', etree.tostring(event))
+                if not allow_empty:
+                    exit(1)
+                #ranks.append(0)
 
-            else:
-                ranks.append(int(rank))
-            if int(rank) == 0:
-                print('WARNING: rank is 0:', etree.tostring(event))
+            #if int(rank) == 0:
+            #    print('WARNING: rank is 0:', etree.tostring(event))
+            ranks.append(int(rank))
+            #if int(rank) == 0:
+            #    print('WARNING: rank is 0:', etree.tostring(event))
     print('events:', event_count, 'ranks:', len(ranks))
     assert(len(ranks) == event_count)
     return ranks
@@ -134,11 +162,18 @@ def fix_line_breaks(filename, rec_type):
 
 
 def fix_xml_tags(text):
+    text = text.replace('&amp;', '&')
     text = text.replace('&lt;EVENT&gt;', '<EVENT>').replace('&lt;/EVENT&gt;', '</EVENT>')
+    text = text.replace('&lt;EVENT', '<EVENT')
+    text = text.replace('&amp;lt;EVENT&amp;gt;;', '<EVENT>').replace('&amp;lt;/EVENT&amp;gt;', '</EVENT>')
     text = text.replace('&lt;TIMEX3&gt;', '<TIMEX3>').replace('&lt;/TIMEX3&gt;', '</TIMEX3>')
+    text = text.replace('&lt;TIMEX3', '<TIMEX3')
+    text = text.replace('&amp;lt;TIMEX3&amp;gt;', '<TIMEX3>').replace('&amp;lt;/TIMEX3&amp;gt;', '</TIMEX3>')
     text = text.replace('&lt;SIGNAL&gt;', '<SIGNAL>').replace('&lt;/SIGNAL&gt;', '</SIGNAL>')
+    text = text.replace('&lt;SIGNAL', '<SIGNAL')
     text = text.replace('&lt;TLINK', '<TLINK').replace('/&gt;', '/>')
-    text = text.replace('" &gt;', '">').replace(' >', '>')
+    text = text.replace('" &gt;', '">')
+    text = text.replace('"&gt;', '">').replace(' >', '>')
     text = text.replace('&', '&amp;') # escape any leftover and signs
     return text
 
@@ -178,12 +213,13 @@ def generate_permutations(ids, x, y):
     return new_ids, new_x, new_y
 
 
-def load_xml_tags(ann, unwrap=True):
-    print('load_xml_tags:', ann)
-    if unwrap:
+def load_xml_tags(ann, unwrap=True, decode=False):
+    #print('load_xml_tags:', ann)
+    if decode:
         ann = ann.decode('utf8')
+    if unwrap:
         ann_xml = etree.fromstring(ann)
-        ann_text = ann_xml.text
+        ann_text = stringify_children(ann_xml)
     else:
         ann_text = ann
     ann_text = fix_xml_tags(ann_text) # Escape & signs that might have been unescaped
@@ -275,7 +311,8 @@ def score_vec_labels(true_labs, pred_labs):
     Not using NLTK because it would split apart contractions and we don't want that
 '''
 def split_words(text):
-    return re.findall(r"[\w']+|[.,!?;$=/\-\[\]]", text.strip())
+    return wordpunct_tokenize(text)
+    #return re.findall(r"[\w']+|[.,!?;$=/\-\[\]]", text.strip())
 
 
 ''' Get content of a tree node as a string

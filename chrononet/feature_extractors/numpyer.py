@@ -22,11 +22,14 @@ def to_feats(df, use_numpy=True, doc_level=False):
     feats = []
     for i, row in df.iterrows():
         flist = row['feats']
-        #if debug and i == 0:
-        #    print('feats[0]:', flist)
+        if type(flist) is str:
+            flist = ast.literal_eval(flist)
+
         feats.append(flist)
-    if debug:
-        print('to_feats: ', row['docid'], 'feats:', len(feats))
+        if debug:
+            print('to_feats: ', row['docid'], 'feats:', len(flist))
+            #if i == 0:
+            print('feats[0]:', type(flist[0]), flist[0])
     if use_numpy:
         return numpy.asarray(feats).astype('float')
     else:

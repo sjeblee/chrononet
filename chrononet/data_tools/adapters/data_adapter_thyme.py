@@ -25,13 +25,18 @@ class DataAdapterThyme(DataAdapter):
             row['docid'] = child.find('record_id').text
             docid = row['docid']
             row['text'] = child.find('narrative').text
-            row['tags'] = etree.tostring(child.find('narr_timeml_simple'), encoding='utf8')
+            row['tags'] = etree.tostring(child.find('narr_timeml_simple'), encoding='utf8').decode('utf8')
             event_list = child.find('event_list')
             elem = data_util.load_xml_tags(row['tags'])
             event_elem = etree.Element('events')
+            dct = ''
             for child in elem:
                 if child.tag == 'EVENT':
                     event_elem.append(child)
+                elif child.tag == 'TIMEX3':
+                    if 'functionInDocument' in child.attrib and child.attrib['functionInDocument'] == 'CREATION_TIME':
+                        dct = child.text
+            event_elem = data_util.add_time_ids(event_elem, elem)
             row['events'] = etree.tostring(event_elem).decode('utf8')
             print(docid, 'event_list:', type(event_list))
             if event_list is None:
@@ -40,6 +45,7 @@ class DataAdapterThyme(DataAdapter):
             print(docid, 'event_ranks:', row['event_ranks'])
             # No diagnosis yet for THYME
             row['diagnosis'] = ''
+            row['dct'] = dct
             df = df.append(row, ignore_index=True)
         return df
 

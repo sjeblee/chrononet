@@ -1,11 +1,13 @@
 #!/usr/bin/python3
 
+import math
 import numpy
 import random
 import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from allennlp.modules.elmo import Elmo, batch_to_ids
 from torch import optim
 
 #from models.loss_functions import Kendall_Tau_Loss
@@ -15,18 +17,21 @@ debug = True
 tdevice = 'cpu'
 use_cuda = torch.cuda.is_available()
 if use_cuda:
-    tdevice = torch.device('cuda:2')
+    tdevice = torch.device('cuda:3')
 
 # GRU with GRU encoder, input: (conversations (1), utterances, words, embedding_dim)
 class GRU_GRU(nn.Module):
     def __init__(self, input_size, encoding_size, hidden_size, output_size, dropout_p=0.1):
         super(GRU_GRU, self).__init__()
+        options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
+        weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
         self.hidden_size = hidden_size
         self.input_size = input_size
         self.encoding_size = encoding_size
         self.output_size = output_size
         self.dropout = dropout_p
-        self.gru0 = nn.GRU(input_size, int(encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
+        self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
+        self.gru0 = nn.GRU(input_size+1, int(encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
         self.gru1 = nn.GRU(encoding_size, hidden_size, bidirectional=True, dropout=dropout_p, batch_first=True)
         self.linear = nn.Linear(hidden_size*2, output_size)
         self.softmax = nn.Softmax(dim=2)
@@ -40,10 +45,31 @@ class GRU_GRU(nn.Module):
         index = 0
         extra_size = 0
         for row in input:
+            # ELMo embedding for each event (sequence of words)
+            words = row[0]
+            #word_flags = row[1]
+            context = row[1]
+            time_words = row[2]
+            time_val = row[3]
+            flags = row[4]
+            character_ids = batch_to_ids([context]).to(tdevice)
+            embeddings = self.elmo(character_ids)['elmo_representations']
+            #print('elmo embeddings:', len(embeddings))
+            X = embeddings[0].squeeze()
+            #print('input_size:', self.input_size, 'X:', X.size())
+            uttX = X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
+
+            # Append the target flags
+            c_flags = torch.tensor(flags, dtype=torch.float, device=tdevice).view(1, -1, 1)
+            print('X:', uttX.size(), 'c_flags:', c_flags.size())
+            uttX = torch.cat((uttX, c_flags), dim=2)
+
             # Create a tensor
+            '''
             uttXnp = numpy.asarray(row).astype('float')
             uttX = torch.tensor(uttXnp, dtype=torch.float, device=tdevice)
-            uttX = uttX.view(1, -1, self.input_size) # should be (1, #words, input_dim)
+            '''
+
             #print('input tensor:', uttX)
             encoding, hn = self.gru0(uttX, hn) # should be (1, #words, encoding_dim)
             enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
@@ -111,17 +137,17 @@ class GRU_GRU(nn.Module):
             num_examples = len(X)
             if encoding_size > 0:
                 print("X 000:", str(type(X[0][0][0])), "Y 00:", str(type(Y[0][0])))
-                input_dim = X[0][0][0].shape[0]
+                #input_dim = X[0][0][0].shape[0]
                 #output_dim = Y[0][0].shape[0]
-            else:
-                input_dim = len(X[0][0])
+            #else:
+                #input_dim = len(X[0][0])
                 #output_dim = len(Y[0][0])
             print("X list:", str(len(X)), "Y list:", str(len(Y)))
 
         if X2 is not None:
             print("X2 list:", len(X2))
 
-        print("input_dim: ", str(input_dim))
+        #print("input_dim: ", str(input_dim))
         print("output_dim: ", str(output_dim))
 
         # Set up optimizer and loss function
@@ -284,20 +310,29 @@ class GRU_GRU(nn.Module):
 # Set to Sequence model for temporal ordering ##############################
 
 class SetToSequence_encoder(nn.Module):
-    def __init__(self, input_size, encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50):
+    def __init__(self, input_size, encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50):
         super(SetToSequence_encoder, self).__init__()
+
+        options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
+        weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
 
         self.read_cycles = read_cycles
         self.input_size = input_size # word vector dim
+        self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
+        print('encoder input_size:', input_size)
         self.encoding_size = encoding_size
+        self.time_encoding_size = time_encoding_size
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.dropout = dropout_p
-        self.gru0 = nn.GRU(self.input_size, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).double()
+        self.gru0 = nn.GRU(self.input_size+1, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).double()
+        print('gr0 input_size:', self.gru0.input_size)
+        #self.gru_time = nn.GRU(self.input_size, int(self.time_encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).double()
+        #self.gru_c = nn.GRU(self.input_size, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).double()
         self.gru1 = nn.GRUCell(self.hidden_size, self.hidden_size).double() # encoder
 
         # Attention calculations
-        self.bilinear = nn.Bilinear(self.encoding_size, self.hidden_size, 1).double()
+        self.bilinear = nn.Bilinear(self.hidden_size, self.hidden_size, 1).double()
         self.softmax = nn.Softmax(dim=1).double()
 
     ''' Input is a list of lists of numpy arrays
@@ -305,23 +340,95 @@ class SetToSequence_encoder(nn.Module):
     def forward(self, input):
         encodings = []
         hn = None
+        hn_t = None
+        hn_c = None
         index = 0
 
         # Generate the event encodings
+        print('events:', len(input))
         for row in input:
             # Create a tensor
-            Xnp = numpy.asarray(row).astype('float64')
-            X = torch.tensor(Xnp, dtype=torch.float64, device=tdevice)
+            #Xnp = numpy.asarray(row).astype('float64')
+            #print('row:', type(row), len(row))
+            #X = torch.tensor(Xnp, dtype=torch.float64, device=tdevice)
+
+            # ELMo embedding for each event (sequence of words)
+            words = row[0]
+            #word_flags = row[1]
+            context = row[1]
+            time_words = row[2]
+            time_val = row[3]
+            flags = row[4]
+            '''
+            character_ids = batch_to_ids([words]).to(tdevice)
+            embeddings = self.elmo(character_ids)['elmo_representations']
+            #print('elmo embeddings:', len(embeddings))
+            X = embeddings[0].double().squeeze()
+
+
+            #print('X:', X.size())
+            #flag_tensor = torch.tensor(word_flags, dtype=torch.double, device=tdevice).view(-1, 1)
+            #X = torch.cat((X, flag_tensor), dim=1)
             X = X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
-            #print('input tensor:', uttX)
+            #print('input tensor:', X.size())
             encoding, hn = self.gru0(X, hn) # should be (1, #words, encoding_dim)
             enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
             #if debug: print('enc:', str(enc.size()), enc)
-            encodings.append(enc)
+            '''
+
+            # Context encoding
+            character_ids = batch_to_ids([context]).to(tdevice)
+            embeddings = self.elmo(character_ids)['elmo_representations']
+            #print('elmo embeddings:', len(embeddings))
+            X = embeddings[0].double()
+            X = X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
+
+            # Append the target flags
+            c_flags = torch.tensor(flags, dtype=torch.float64, device=tdevice).view(1, -1, 1)
+            #print('X:', X.size(), 'c_flags:', c_flags.size())
+            X = torch.cat((X, c_flags), dim=2)
+
+            #print('context tensor:', X.size())
+            encoding_c, hn_c = self.gru0(X, hn_c) # should be (1, #words, encoding_dim)
+            context_enc = encoding_c[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
+
+            '''
+            # Time phrase encoding
+            if time_words is None:
+                time_emb = torch.zeros(self.time_encoding_size, dtype=torch.float64, device=tdevice)
+            else:
+                time_char_ids = batch_to_ids([time_words]).to(tdevice)
+                time_embeddings = self.elmo(time_char_ids)['elmo_representations']
+                time_X = time_embeddings[0].double()
+                time_X = time_X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
+                #print('time tensor:', time_X.size())
+                time_encoding, hn_t = self.gru_time(time_X, hn_t) # should be (1, #words, encoding_dim)
+                time_emb = time_encoding[:, -1, :].view(self.time_encoding_size)
+
+            if time_val is None:
+                time_enc = torch.zeros(2, dtype=torch.float64, device=tdevice)
+            else:
+                time_enc = torch.tensor(time_val, dtype=torch.float64, device=tdevice)
+
+            # Concatenate the time val and embedding
+            time_enc = torch.cat((time_emb, time_enc), dim=0)
+            '''
+
+            # Structured features
+            #flag_tensor = torch.tensor(flags, dtype=torch.float64, device=tdevice)
+
+            #event_vector = torch.cat((enc, context_enc, time_emb), dim=0)
+            #event_vector = torch.cat((enc, time_emb), dim=0)
+            event_vector = context_enc
+
+            #print('event_vector size:', event_vector.size())
+            #event_vector = enc
+            encodings.append(event_vector)
             index += 1
 
         mem_block = torch.stack(encodings)
-        mem_block = mem_block.view(-1, self.encoding_size) # Treat whole conversation as a batch (n, enc_size)
+        print('mem_block size:', mem_block.size())
+        mem_block = mem_block.view(-1, self.hidden_size) # Treat whole conversation as a batch (n, enc_size*2)
         #print('mem_block:', mem_block.size())
 
         # Feed input into the encoder
@@ -392,11 +499,11 @@ class SetToSequence_decoder(nn.Module):
         #print('dec attention:', attention_matrix.size(), attention_matrix)
 
         # Force the model to choose a new item that hasn't already been chosen
-        attention_matrix = self.softmax((e_matrix * mask).view(1, -1)).squeeze()
+        #attention_matrix = self.softmax((e_matrix * mask).view(1, -1)).squeeze()
+        attention_matrix = self.logsoftmax(e_matrix.view(1, -1)).squeeze() # log probs for NLL loss
         mask_matrix = attention_matrix * mask # Apply the mask
-        #print('e_mask:', e_mask)
-        #mask_matrix = self.logsoftmax(e_mask.view(1, -1)).squeeze()
-        print('dec softmax attention w/ mask:', mask_matrix.size(), mask_matrix)
+
+        #print('dec softmax attention w/ mask:', mask_matrix.size(), mask_matrix)
 
         # Select the item with the highest probability from attention
         #print('argmax:', torch.argmax(mask_matrix, dim=0))
@@ -407,7 +514,7 @@ class SetToSequence_decoder(nn.Module):
             max_tensor, index_tensor = torch.max(mask_matrix, dim=0)
             target_index = int(index_tensor.item())
             max_prob = max_tensor.item()
-            print('max_prob:', max_prob)
+            #print('max_prob:', max_prob)
             targets = []
             n = float(mask_matrix.size(0))
             for j in range(mask_matrix.size(0)):
@@ -415,18 +522,26 @@ class SetToSequence_decoder(nn.Module):
                     prob = mask_matrix[j]
                     if ((max_prob - prob) <= (self.group_thresh/n)):
                         targets.append(j)
-                        print('choosing item', j, 'with prob', mask_matrix[j].item())
+                        #print('choosing item', j, 'with prob', mask_matrix[j].item())
                         mask[j] = 0.0
             #target = torch.stack(targets)
             target = targets
             attention_matrix = self.softmax(e_matrix.view(1, -1)).squeeze() # log probs for NLL loss
-        else:
-            attention_matrix = self.logsoftmax(e_matrix.view(1, -1)).squeeze() # log probs for NLL loss
+
+        else: # Linear prediction, use log domain
+            #attention_matrix = self.logsoftmax(e_matrix.view(1, -1)).squeeze() # log probs for NLL loss
+
+            if not train: # Fix nans and -inf in the mask
+                for li in range(mask_matrix.size(0)):
+                    if math.isnan(mask_matrix[li]) or mask[li] == float('-inf'):
+                        mask_matrix[li] = float('-inf')
+                print('fixed log_probs:', mask_matrix)
+
             target = torch.argmax(mask_matrix, dim=0)
             target_index = int(target.item())
             print('choosing item', target_index, 'with prob', mask_matrix[target_index].item())
             if not train:
-                mask[target_index] = 0.0 # Set the mask so the same event won't be output again
+                mask[target_index] = float('-inf') # Set the mask so the same event won't be output again
         #print('new mask:', mask)
         #x_i = mem_block[target_index]
 
@@ -435,10 +550,11 @@ class SetToSequence_decoder(nn.Module):
 
 class SetToSequence:
 
-    def __init__(self, input_size, encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, group_thresh=None):
-        self.encoder = SetToSequence_encoder(input_size, encoding_size, hidden_size, output_size, dropout_p, read_cycles)
+    def __init__(self, input_size, encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, group_thresh=None, invert_ranks=False):
+        self.encoder = SetToSequence_encoder(input_size, encoding_size, time_encoding_size, hidden_size, output_size, dropout_p, read_cycles)
         self.decoder = SetToSequence_decoder(hidden_size, output_size, dropout_p, group_thresh)
         self.group_thresh = group_thresh
+        self.invert_ranks = invert_ranks
 
     ''' Creates and trains a recurrent neural network model. Supports SimpleRNN, LSTM, and GRU
         X: a list of training data
@@ -477,7 +593,7 @@ class SetToSequence:
 
         num_examples = len(X)
         print("X 000:", str(type(X[0][0][0])), "Y 00:", str(type(Y[0][0])))
-        input_dim = X[0][0][0].shape[0]
+        input_dim = self.encoder.input_size
         print("X list:", str(len(X)), "Y list:", str(len(Y)))
 
         print("input_dim: ", str(input_dim))
@@ -519,7 +635,7 @@ class SetToSequence:
                 use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
 
                 # Initialize the prediction
-                x_i = torch.zeros(self.encoder.encoding_size, dtype=torch.float64, device=tdevice)
+                x_i = torch.zeros(self.encoder.hidden_size, dtype=torch.float64, device=tdevice)
                 output_indices = []
                 output_probs = []
                 correct_ranks = labels.squeeze()
@@ -527,8 +643,11 @@ class SetToSequence:
                 if self.group_thresh is not None:
                     flatten = False
                 correct_indices = ranks_to_indices(correct_ranks.tolist(), flatten)
+                # INVERT the ranks?
+                if self.invert_ranks:
+                    correct_indices.reverse()
                 num_timesteps = len(correct_indices)
-                if i==0: print('correct_indices:', correct_indices)
+                #if i==0: print('correct_indices:', correct_indices)
                 done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
 
                 #di = 0
@@ -536,7 +655,7 @@ class SetToSequence:
                 for di in range(seq_length):
                     # Run until we've picked all the items
                     index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask, True)
-                    print('di:', di, 'mask:', done_mask)
+                    #print('di:', di, 'mask:', done_mask)
 
                     # Select multiple items at each timestep
                     if self.group_thresh is not None:
@@ -600,10 +719,14 @@ class SetToSequence:
                 else:
                     #if self.group_thresh is None:
                     loss = criterion(output_probs, torch.tensor(correct_indices, dtype=torch.long, device=tdevice, requires_grad=False))
+
+                # Un-invert the ranks
+                if self.invert_ranks:
+                    output_indices.reverse()
                 output_ranks = indices_to_ranks(output_indices)
-                if i==0: print('output_ranks:', output_ranks)
+                #if i==0: print('output_ranks:', output_ranks)
                 #loss = criterion(torch.tensor(output_ranks, dtype=torch.float, device=tdevice, requires_grad=True), correct_ranks)
-                print('loss:', loss.item())
+                #print('loss:', loss.item())
 
                 loss.backward()
                 encoder_optimizer.step()
@@ -638,13 +761,21 @@ class SetToSequence:
             decoder_hidden = encoder_hidden
 
             # Initialize the prediction
-            x_i = torch.zeros(self.encoder.encoding_size, dtype=torch.float64, device=tdevice)
+            x_i = torch.zeros(self.encoder.hidden_size, dtype=torch.float64, device=tdevice)
             output_indices = []
             done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
 
             # Run until we've picked all the items
             di = 0
             while torch.max(done_mask).item() > 0.0:
+                print('test di:', di, 'mask:', done_mask)
+
+                # Make sure we don't accidentally get stuck in an infinite loop
+                if di > done_mask.size(0):
+                    print('ERROR: too many predict iterations')
+                    exit(1)
+
+                # Run the linear decoder
                 index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask)
 
                 # Select multiple items at each timestep
@@ -665,6 +796,9 @@ class SetToSequence:
                 #output_probs.append(log_probs)
                 di += 1
 
+            # Un-invert the ranks
+            if self.invert_ranks:
+                output_indices.reverse()
             output_ranks = indices_to_ranks(output_indices)
             print('output_ranks:', output_ranks)
             outputs.append(output_ranks)
@@ -704,22 +838,23 @@ class SetToSequenceGroup_decoder(nn.Module):
         #print('dec attention:', attention_matrix.size(), attention_matrix)
 
         # Force the model to choose a new item that hasn't already been chosen
-        attention_matrix = self.softmax(e_matrix.view(1, -1)).squeeze()
-        if train:
-            mask_matrix = attention_matrix
-        else:
-            mask_matrix = attention_matrix * mask # Apply the mask
+        attention_matrix = self.logsoftmax(e_matrix.view(1, -1)).squeeze()
+        #if train:
+        mask_matrix = attention_matrix
+        #else:
+        #    mask_matrix = attention_matrix * mask # Apply the mask
         #print('dec softmax attention w/ mask:', mask_matrix.size(), mask_matrix)
 
         # Select the item with the highest probability from attention
         #attention_matrix = self.logsoftmax(e_matrix.view(1, -1)).squeeze() # log probs for NLL loss
         target = torch.argmax(mask_matrix, dim=0)
-        target_index = int(target.item())
-        if mask_matrix.dim() == 0:
-            prob = mask_matrix.item()
-        else:
-            prob = mask_matrix[target_index].item()
-        print('highest item', target_index, 'with prob', prob)
+        #target_index = int(target.item())
+        #if mask_matrix.dim() == 0:
+        #    prob = mask_matrix.item()
+        #else:
+        #    prob = mask_matrix[target_index].item()
+        #print('highest item', target_index, 'with prob', prob)
+
         #mask[target_index] = 0.0 # Set the mask so the same event won't be output again
         #print('new mask:', mask)
 
@@ -750,11 +885,13 @@ class SetToSequenceGroup_transition(nn.Module):
 
 class SetToSequenceGroup:
 
-    def __init__(self, input_size, encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, group_thresh=None):
-        self.encoder = SetToSequence_encoder(input_size, encoding_size, hidden_size, output_size, dropout_p, read_cycles)
+    def __init__(self, input_size, encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, group_thresh=None, invert_ranks=False, sig=1):
+        self.encoder = SetToSequence_encoder(input_size, encoding_size, time_encoding_size, hidden_size, output_size, dropout_p, read_cycles)
         self.decoder = SetToSequenceGroup_decoder(hidden_size, output_size, dropout_p, group_thresh)
         self.group_thresh = group_thresh
         self.hidden_size = hidden_size
+        self.invert_ranks = invert_ranks
+        self.sigma = sig
 
         # Group transition
         #self.group = SetToSequenceGroup_transition(hidden_size, dropout_p)
@@ -775,7 +912,7 @@ class SetToSequenceGroup:
         dropout = self.encoder.dropout
         output_dim = self.decoder.output_size
         learning_rate = 0.01
-        group_learning_rate = 0.001
+        #group_learning_rate = 0.001
         print_every = 100
         teacher_forcing_ratio = 0.9
 
@@ -788,8 +925,9 @@ class SetToSequenceGroup:
         #group_optimizer = optim.Adam(self.group.parameters(), lr=group_learning_rate)
 
         # Loss function
-        #criterion = nn.KLDivLoss()
-        criterion = nn.BCEWithLogitsLoss()
+        criterion = nn.KLDivLoss()
+        #criterion = nn.BCEWithLogitsLoss()
+        #criterion = nn.MultiLabelSoftMarginLoss()
         #group_criterion = nn.BCELoss()
         #criterion = nn.NLLLoss()
 
@@ -800,7 +938,7 @@ class SetToSequenceGroup:
 
         num_examples = len(X)
         print("X 000:", str(type(X[0][0][0])), "Y 00:", str(type(Y[0][0])))
-        input_dim = X[0][0][0].shape[0]
+        input_dim = self.encoder.input_size
         print("X list:", str(len(X)), "Y list:", str(len(Y)))
 
         print("input_dim: ", str(input_dim))
@@ -826,6 +964,7 @@ class SetToSequenceGroup:
 
                 labels = batchY.view(1, -1, output_dim)
                 seq_length = labels.size(1)
+
                 #input_length = self.encoder.read_cycles
                 #if debug: print("seq_length:", str(seq_length))
 
@@ -839,10 +978,11 @@ class SetToSequenceGroup:
 
                 # Run the decoder
                 decoder_hidden = encoder_hidden
+                #print('decoder hidden:', decoder_hidden.size())
                 use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
 
                 # Initialize the prediction
-                x_i = torch.zeros(self.encoder.encoding_size, dtype=torch.float64, device=tdevice)
+                x_i = torch.zeros(hidden_size, dtype=torch.float64, device=tdevice)
                 output_indices = []
                 output_probs = []
                 correct_ranks = labels.squeeze()
@@ -850,8 +990,13 @@ class SetToSequenceGroup:
                 if self.group_thresh is not None:
                     flatten = False
                 correct_indices = ranks_to_indices(correct_ranks.tolist(), flatten)
+
+                # INVERT the ranks?
+                if self.invert_ranks:
+                    correct_indices.reverse()
+
                 num_timesteps = len(correct_indices)
-                if i==0: print('correct_indices:', correct_indices)
+                #if i==0: print('correct_indices:', correct_indices)
                 done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
                 current_rank = []
                 x_list = []
@@ -874,10 +1019,10 @@ class SetToSequenceGroup:
                     if use_teacher_forcing:
                         x_i = x_correct
 
-                    x_i = x_i.view(-1, encoding_size)
+                    x_i = x_i.view(-1, hidden_size)
                     if x_i.size(0) > 1:
                         x_i = torch.mean(x_i, dim=0)
-                    print('x_i:', x_i.size())
+                    #print('x_i:', x_i.size())
 
                     x_list.append(x_i)
 
@@ -886,51 +1031,46 @@ class SetToSequenceGroup:
                     if di < len(correct_indices):
                         for val in correct_indices[di]:
                             target_tensor[val] = 1.0
-                    target_probs.append(target_tensor.view(1, seq_length))
+                    target_tensor = target_tensor.view(1, seq_length)
+                    target_probs.append(target_tensor)
                     print(di, 'target:', target_tensor)
                     print(di, 'predic:', log_probs)
 
-                    '''
-                    trans_loss = 0
-                    x_tensor = torch.stack(x_list).clone().detach() # Detach from the previous graph so we can optimize separately
-
-                    # Group transition
-
-                    group_prob = self.group(x_tensor.unsqueeze(0), decoder_hidden.view(1, 1, -1)).squeeze()
-                    print('group transition prob:', group_prob)
-                    should_transition = torch.zeros(1, dtype=torch.float64, device=tdevice, requires_grad=False)
-
-                    if (di > 0) and correct_ranks[correct_indices[di]].item() == correct_ranks[correct_indices[di-1]].item():
-                        should_transition[0] = 0.0
-                    else:
-                        should_transition[0] = 1.0
-                    print('should_transition:', should_transition)
-
-
-                    #if torch.argmax(group_prob).item() == 1:
-                    if group_prob.item() > 0.5: # if prob is high or this is the last item
-                        if len(current_rank) > 0:
-                            output_indices.append(current_rank)
-                        current_rank = []
-                    current_rank.append(index)
-
-                    trans_loss = group_criterion(group_prob, should_transition)
-                    print('trans loss:', trans_loss.item())
-                    trans_loss.backward(retain_graph=True)
-                    group_optimizer.step()
-                    output_probs.append(log_probs)
-                    '''
+                    # Calculate loss per timestep
+                    loss += criterion(log_probs, target_tensor)
+                    #print('loss:', loss.item())
+                    #loss.backward(retain_graph=True)
+                    #encoder_optimizer.step()
+                    #decoder_optimizer.step()
 
                     di += 1
 
                 output_indices.append(current_rank)
-                output_ranks = indices_to_ranks(output_indices)
-                output_tensor = torch.stack(output_probs).view(-1, seq_length)
-                target_tensor = torch.stack(target_probs).view(-1, seq_length)
 
+                # Un-invert the ranks
+                if self.invert_ranks:
+                    output_indices.reverse()
+
+                #output_ranks = indices_to_ranks(output_indices)
+                #if i==0: print('output_indices:', output_indices)
+
+                output_tensor = torch.stack(output_probs).view(-1, seq_length)
+                if num_timesteps > 1:
+                    target_tensor = torch.stack(target_probs).view(-1, seq_length)
+                    target_tensor = smooth_distribution(target_tensor, self.sigma)
+                else:
+                    target_tensor = target_probs[0].view(1, -1)
+
+                #print('target:', target_tensor)
+                #target_tensor = torch.log(target_tensor)
+                print('output tensor:', output_tensor)
+                print('target smoothed:', target_tensor)
+
+                '''
                 loss = criterion(output_tensor, target_tensor)
-                if i==0: print('output_ranks:', output_ranks)
+
                 #loss = criterion(torch.tensor(output_ranks, dtype=torch.float, device=tdevice, requires_grad=True), correct_ranks)
+                '''
                 print('loss:', loss.item())
 
                 loss.backward()
@@ -944,8 +1084,8 @@ class SetToSequenceGroup:
         print('training took', time.time()-start, 's')
 
     def predict(self, testX, batch_size=1):
-        print("X 000:", str(type(testX[0][0][0])))
-        print("X list:", str(len(testX)))
+        #print("X 000:", str(type(testX[0][0][0])))
+        #print("X list:", str(len(testX)))
         outputs = []
 
         # Run the model
@@ -954,10 +1094,10 @@ class SetToSequenceGroup:
             #if debug: print("batchX len:", len(batchXnp))
 
             #print("batchX size:", str(batchX.size()), "batchY size:", str(batchY.size()))
-            if debug: print("testX[0]:", str(batchXnp[0]))
+            #if debug: print("testX[0]:", str(batchXnp[0]))
             seq_length = len(batchXnp)
             #input_length = self.encoder.read_cycles
-            if debug: print("test seq_length:", str(seq_length))
+            #if debug: print("test seq_length:", str(seq_length))
 
             # Run the encoder
             mem_block, encoder_hidden = self.encoder(batchXnp)
@@ -966,7 +1106,7 @@ class SetToSequenceGroup:
             decoder_hidden = encoder_hidden
 
             # Initialize the prediction
-            x_i = torch.zeros(self.encoder.encoding_size, dtype=torch.float64, device=tdevice)
+            x_i = torch.zeros(self.encoder.hidden_size, dtype=torch.float64, device=tdevice)
             output_indices = []
             done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
 
@@ -976,58 +1116,87 @@ class SetToSequenceGroup:
 
             # Run until we've picked all the items
             di = 0
+            avg_gap = 0.0
             while torch.max(done_mask).item() > 0.0:
                 index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask)
-                print('test di:', di, 'mask:', done_mask)
 
                 # Select multiple items at each timestep
                 index = int(index.item())
 
                 # Allow multiple events to be output at the same rank (prob threshold?)
+                log_probs = log_probs * done_mask
+                # Fix any nans
+                for li in range(log_probs.size(0)):
+                    if math.isnan(log_probs[li]) or done_mask[li] == float('-inf'):
+                        log_probs[li] = float('-inf')
+                print('test di:', di, 'mask:', done_mask)
+                print('log_probs:', log_probs)
                 max_tensor, index_tensor = torch.max(log_probs, dim=0)
                 #target_index = int(index_tensor.item())
                 max_prob = max_tensor.item()
                 print('max_prob:', max_prob)
                 targets = []
                 n = float(log_probs.size(0))
-                print('n:', n)
+                #print('n:', n)
+
+                # Elastic probability threshold
+                if di == 0:
+                    if math.isinf(max_prob):
+                        avg_gap = 0.0
+                    else:
+                        probs2 = log_probs.tolist()
+                        sorted_probs = []
+                        for prob in probs2:
+                            if not math.isinf(prob): # Ignore -inf values
+                                sorted_probs.append(prob)
+
+                        # Remove outliers
+                        elements = numpy.array(sorted_probs)
+                        prob_mean = numpy.mean(elements, axis=0)
+                        prob_sd = numpy.std(elements, axis=0)
+                        sorted_probs = [x for x in sorted_probs if (x > prob_mean - 1 * prob_sd)]
+                        sorted_probs = [x for x in sorted_probs if (x < prob_mean + 1 * prob_sd)]
+
+                        if len(sorted_probs) < 2: # Make sure there are at least 2 probs left
+                            avg_gap = 0.0
+                        else:
+                            sorted(sorted_probs, reverse=True)
+                            gaps = []
+                            for gindex in range(1, len(sorted_probs)):
+                                gval = sorted_probs[gindex]
+                                prev = sorted_probs[gindex-1]
+                                diff = math.fabs(gval-prev)
+                                gaps.append(diff)
+                            avg_gap = torch.mean(torch.tensor(gaps, dtype=torch.float64, device=tdevice)).item()/2.0
+                    #print('avg_gap:', avg_gap)
+
                 for j in range(log_probs.size(0)):
-                    if done_mask[j] > 0.0 or max_prob == 0.0:
+                    if done_mask[j] > 0.0:# or max_prob == 0.0:
                         prob = log_probs[j]
-                        if ((max_prob - prob) <= (self.group_thresh/n)):
+                        if (math.fabs(max_prob - prob) <= (self.group_thresh)) or math.isinf(max_prob):
                             targets.append(j)
                             print('choosing item', j, 'with prob', log_probs[j].item())
-                            done_mask[j] = 0.0
+                            done_mask[j] = float('-inf')
                 output_indices.append(targets)
 
                 xi_list = []
-                print('targets:', len(targets))
+                #print('targets:', len(targets))
                 for ti in targets:
                     x_i = mem_block[ti]
                     xi_list.append(x_i)
                 if x_i.size(0) > 1:
                     x_i = torch.mean(torch.stack(xi_list), dim=0)
-                print('test x_i:', x_i.size())
-
-                # Group transition
-                '''
-                x_tensor = torch.stack(x_list)
-                group_prob = self.group(x_tensor.unsqueeze(0), decoder_hidden.view(1, 1, -1)).squeeze()
-                print('group transition prob:', group_prob)
-
-                #if torch.argmax(group_prob).item() == 1: # if prob is high or this is the last item
-                if group_prob.item() > 0.5:
-                    if len(current_rank) > 0:
-                        output_indices.append(current_rank)
-                    current_rank = []
-                current_rank.append(index)
-                '''
+                #print('test x_i:', x_i.size())
 
                 di += 1
 
             #output_indices.append(current_rank)
+            # Un-invert the ranks
+            if self.invert_ranks:
+                output_indices.reverse()
+
             output_ranks = indices_to_ranks(output_indices)
-            print('output_ranks:', output_ranks)
+            #print('output_ranks:', output_ranks)
             outputs.append(output_ranks)
         return outputs
 
@@ -1039,7 +1208,7 @@ def ranks_to_indices(ranks, flatten=True):
     # For now, rank them sequentially even if they have the same rank
     #print('ranks:', ranks)
     max_rank = int(numpy.max(numpy.asarray(ranks)))
-    print('ranks_to_indices: max rank:', max_rank)
+    #print('ranks_to_indices: max rank:', max_rank)
     indices_multiple = [None] * (max_rank+1)
 
     if type(ranks) == float:
@@ -1055,7 +1224,7 @@ def ranks_to_indices(ranks, flatten=True):
             indices_multiple[rank] = []
         indices_multiple[rank].append(i)
     indices_multiple = [x for x in indices_multiple if x is not None] # Filter out none entries
-    print('indices_multiple:', indices_multiple)
+    #print('indices_multiple:', indices_multiple)
 
     if flatten:
         indices = []
@@ -1076,10 +1245,12 @@ def indices_to_ranks(indices):
         num_indices = 1
     else:
         if type(indices[0]) is list:
+            print('indices_to_rank: group')
             num_indices = 0
             for sub in indices:
                 num_indices += len(sub)
         else:
+            print('indices_to_rank: linear')
             num_indices = len(indices)
 
     print('indices_to_ranks:', num_indices, ':', indices)
@@ -1092,3 +1263,33 @@ def indices_to_ranks(indices):
         else:
             ranks[int(indices[i])] = i
     return ranks
+
+
+''' Gaussian function for smoothing target distribution
+'''
+def gaussian(x, mu, sig):
+    return numpy.exp(-numpy.power(x - mu, 2.) / (2 * numpy.power(sig, 2.)))
+
+
+''' Smooth the target distribution
+    target: a tensor of the target distribution (timesteps, n)
+'''
+def smooth_distribution(target, sig):
+    n = target.size(1)
+    #sig = float(n)/float(10)
+    #sig = 0.5
+    slices = []
+
+    # For each slice of the tensor
+    print('target', target.size())
+    for y in range(n):
+        slice = target[:, y].squeeze()
+        #print('slice:', slice.size())
+        one_index = torch.argmax(slice, dim=0).item()
+        for k in range(slice.size(0)):
+            slice[k] = max(slice[k].item(), gaussian(abs(one_index - k), 0, sig))
+        slices.append(slice)
+
+    # Concatenate the slices
+    smoothed_target = torch.t(torch.stack(slices, dim=0))
+    return smoothed_target

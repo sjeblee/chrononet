@@ -2,16 +2,23 @@
 # Temporal ordering evaluation functions
 # All functions should be of the form function(y_true, y_pred)
 
+import ast
 import math
 import numpy
 import scipy
 
+from evaluation import eval_util
+from data_tools import data_util
+from data_tools import temporal_util as tutil
+
+debug = True
+
 # Metric functions #########################
 
-def kendalls_tau(true_ranks, pred_ranks):
+def kendalls_tau(true_ranks, pred_ranks, avg=True):
     accuracies = []
     for n in range(len(true_ranks)):
-        pr = pred_ranks[n]
+        pr = numpy.asarray(pred_ranks[n])
         tr = true_ranks[n]
         print('tau: true:', tr)
         print('tau: pred:', pr)
@@ -22,14 +29,22 @@ def kendalls_tau(true_ranks, pred_ranks):
         elif len(tr) == 1:
             tau = 1
         else:
-            tau, pval = scipy.stats.kendalltau(tr, pr)
+            tau, pval = scipy.stats.kendalltau(tr, pr, nan_policy='raise')
             print('Kendalls tau: n=', n, 'tau:', tau, 'p-value:', pval)
-        accuracies.append(tau)
-    if len(accuracies) > 1:
-        acc = numpy.average(numpy.asarray(accuracies))
+        if not numpy.isnan(tau):
+            accuracies.append(tau)
+        else:
+            print('WARNING: Tau score dropped because it was NaN')
+    if avg:
+        if len(accuracies) > 1:
+            acc = numpy.average(numpy.asarray(accuracies))
+        elif len(accuracies) == 0:
+            acc = 0.0
+        else:
+            acc = accuracies[0]
+        return acc
     else:
-        acc = accuracies[0]
-    return acc
+        return accuracies
 
 
 ''' Calculate the mean squared error of the predicted ranks
@@ -54,7 +69,7 @@ def rank_mse(true_ranks, pred_ranks):
 ''' Calculate the pairwise accuracy of a listwise ranking
     Currently this is a macro average (every document has equal weight)
 '''
-def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.001):
+def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.00001, avg=True):
     accuracies = []
     for n in range(len(true_ranks)):
         pr = pred_ranks[n]
@@ -74,14 +89,34 @@ def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.001):
                     se_correct += 1
             accuracy = (so_correct + se_correct)/float(num_pairs)
         accuracies.append(accuracy)
-    if len(accuracies) > 1:
-        acc = numpy.average(numpy.asarray(accuracies))
+    if avg:
+        if len(accuracies) > 1:
+            acc = numpy.average(numpy.asarray(accuracies))
+        else:
+            acc = accuracies[0]
+        return acc
     else:
-        acc = accuracies[0]
-    return acc
+        return accuracies
 
 def epr(true_ranks, pred_ranks):
     return (events_per_rank(true_ranks), events_per_rank(pred_ranks))
+
+def gpr(y_true, y_pred, ref_df):
+    # Load gold pairs
+    print("Extracting pair relations...")
+    rec_ids, true_pairs, true_relations = eval_util.extract_relation_pairs(ref_df)
+    events = []
+    for i, row in ref_df.iterrows():
+        event_elem = data_util.load_xml_tags(row['events'])
+        event_list = []
+        for child in event_elem:
+            event_list.append(child)
+        print('loaded events:', len(event_list))
+        events.append(event_list)
+    pred_pairs, pred_labels = eval_util.pair_relations(events, y_pred)
+
+    gpr = score_relation_pairs(pred_pairs, pred_labels, true_pairs, true_relations)
+    return gpr
 
 # Utility functions ########################
 
@@ -153,3 +188,78 @@ def pair_relations(events, ranks, eps=0.0):
 
 def str_pair(event_pair):
     return event_pair[0].attrib['eid'] + ' ' + event_pair[0].text + ' ' + event_pair[1].attrib['eid'] + ' ' + event_pair[1].text
+
+
+
+
+''' Score relations pairs against gold standard relation pairs
+'''
+def score_relation_pairs(pred_pairs, pred_labels, true_pairs, true_labels):
+    doc_recalls = []
+    doc_true_pairs = []
+    doc_class_recalls = {}
+    doc_class_recalls['BEFORE'] = []
+    doc_class_recalls['AFTER'] = []
+    doc_class_recalls['OVERLAP'] = []
+    doc_class_totals = {}
+    doc_class_totals['BEFORE'] = 0
+    doc_class_totals['AFTER'] = 0
+    doc_class_totals['OVERLAP'] = 0
+    if debug: print('score_relation_pairs:', str(len(pred_pairs)), str(len(pred_labels)), str(len(true_pairs)), str(len(true_labels)))
+    #assert(len(pred_labels) == len(true_labels))
+    #assert(len(pred_pairs) == len(true_pairs))
+    for x in range(len(pred_labels)):
+        total = 0
+        found = 0
+        class_totals = {}
+        class_totals['BEFORE'] = 0
+        class_totals['AFTER'] = 0
+        class_totals['OVERLAP'] = 0
+        class_founds = {}
+        class_founds['BEFORE'] = 0
+        class_founds['AFTER'] = 0
+        class_founds['OVERLAP'] = 0
+        #print('tpairs:', str(len(true_pairs[x])))
+        for y in range(len(true_pairs[x])):
+            tpair = true_pairs[x][y]
+            tlabel = tutil.map_rel_type(true_labels[x][y], 'simple')
+            if debug: print('- tpair:', eval_util.str_pair(tpair), 'tlabel:', str(tlabel))
+            total += 1
+            class_totals[tlabel] += 1
+            #print('pred_pair[0]:', str(pred_pairs[x][0][0]), str(pred_pairs[x][0][1]))
+            for z in range(len(pred_pairs[x])):
+                ppair = pred_pairs[x][z]
+                if tutil.are_pairs_equal(tpair, ppair):
+                    plabel = pred_labels[x][z]
+                    if debug: print("-- checking pair:", eval_util.str_pair(ppair), str(plabel))
+                    if tlabel == plabel:
+                        found += 1
+                        class_founds[tlabel] += 1
+                        if debug: print('--- correct')
+                    # Count before and before/overlap as the same since we're ranking on start time
+                    elif tlabel == 'BEFORE/OVERLAP' and plabel == 'BEFORE':
+                        if debug: print('--- correct (before/overlap)')
+                        found += 1
+                        class_founds[plabel] += 1
+        if total == 0:
+            print('WARNING: no reference relations found!')
+            doc_recall = 0
+        else:
+            doc_recall = found/total
+            for key in class_totals.keys():
+                if class_totals[key] == 0:
+                    val = 0.0
+                else:
+                    val = float(class_founds[key]) / class_totals[key]
+                doc_class_recalls[key].append(val)
+                doc_class_totals[key] += class_totals[key]
+            doc_recalls.append(doc_recall)
+            doc_true_pairs.append(total)
+
+    # Calculate the weighted average recall
+    avg_recall = numpy.average(doc_recalls, weights=doc_true_pairs)
+    for key in doc_class_recalls.keys():
+        avg_class_recall = numpy.average(numpy.asarray(doc_class_recalls[key]))
+        print('Recall', key, str(avg_class_recall), 'num=', str(doc_class_totals[key]))
+
+    return avg_recall

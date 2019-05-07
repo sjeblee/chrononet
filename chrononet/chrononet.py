@@ -10,6 +10,7 @@ import os
 import pandas
 import time
 import torch
+from scipy.stats import ttest_rel
 
 # Local imports
 from data_tools.adapters import data_adapter_thyme, data_adapter_va
@@ -17,17 +18,17 @@ from data_tools import data_util
 from evaluation import eval_metrics, ordering_metrics
 from feature_extractors import numpyer, relations, syntactic, vectors
 from models.sequence.crf import CRFfactory
-from models.ordering.neural_order import NeuralOrderFactory
+from models.ordering.neural_order import NeuralOrderFactory, HyperoptNeuralOrderFactory, NeuralLinearFactory
 from models.ordering.random_order import RandomOrderFactory, MentionOrderFactory
 
 # SETUP
 fe_map = {'relations': relations.extract_relations, 'syntactic': syntactic.sent_features,
-          'event_vectors': vectors.event_vectors, 'none': numpyer.dummy_function}
+          'event_vectors': vectors.event_vectors, 'elmo_vectors': vectors.elmo_event_vectors, 'none': numpyer.dummy_function}
 vector_feats = ['event_vectors']
-model_map = {'crf': CRFfactory, 'random': RandomOrderFactory, 'mention': MentionOrderFactory, 'neural': NeuralOrderFactory}
+model_map = {'crf': CRFfactory, 'random': RandomOrderFactory, 'mention': MentionOrderFactory, 'neural': NeuralOrderFactory, 'neurallinear': NeuralLinearFactory, 'hyperopt': HyperoptNeuralOrderFactory}
 metric_map = {'p': eval_metrics.precision, 'r': eval_metrics.recall, 'f1': eval_metrics.f1,
               'mse': ordering_metrics.rank_mse, 'poa': ordering_metrics.rank_pairwise_accuracy, 'tau': ordering_metrics.kendalls_tau,
-              'epr': ordering_metrics.epr}
+              'epr': ordering_metrics.epr, 'gpr': ordering_metrics.gpr}
 debug = True
 
 def main():
@@ -59,6 +60,7 @@ def main():
     # Create output directory
     if not os.path.exists(outdir):
         os.mkdir(outdir)
+    global inter_prefix
     inter_prefix = '_chrono_'
 
     # PREPROCESSING
@@ -195,30 +197,52 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         vecfile = stage_config['vecfile']
     labelname = test_data_adapter.get_labelname(stage_name)
     vec_model = None
-    dim = 0
+    dim = 1024
     print('Running stage: ', stage_name, 'with models:', str(models), 'and feats:', str(features))
 
     if vecfile is not None:
         print('loading vectors:', vecfile)
         vec_model, dim = vectors.load(vecfile)
-        print('dim:', str(dim))
+    print('dim:', str(dim))
 
     # FEATURE EXTRACTION
-    train_feat_df = train_df.copy()# data_util.create_df(train_df)
-    test_feat_df = test_df.copy()
+
     f_time = time.time()
-    for fe in features:
-        extractor = fe_map[fe]
-        if fe in vector_feats:
-            train_feat_df = extractor(train_feat_df, vec_model)
-            test_feat_df = extractor(test_feat_df, vec_model)
-        else:
-            train_feat_df = extractor(train_feat_df)
-            test_feat_df = extractor(test_feat_df)
+    train_filename = os.path.join(outdir, inter_prefix + 'train_df_' + stage_name + '_feats.csv')
+    test_filename = os.path.join(outdir, inter_prefix + 'test_df_' + stage_name + '_feats.csv')
+    if os.path.exists(train_filename) and os.path.exists(test_filename):
+        if debug: print('Loading feat dfs...')
+        train_feat_df = pandas.read_csv(train_filename)
+        test_feat_df = pandas.read_csv(test_filename)
+        '''
+        for i, row in train_feat_df.iterrows():
+            row_feats = ast.literal_eval(row['feats'])
+            #print('feat type:', type(row_feats))
+            row['feats'] = row_feats
+        for i, row in test_feat_df.iterrows():
+            row['feats'] = ast.literal_eval(row['feats'])
+        '''
+    else:
+        if debug: print('Extracting features...')
+        train_feat_df = train_df.copy()# data_util.create_df(train_df)
+        test_feat_df = test_df.copy()
+        for fe in features:
+            extractor = fe_map[fe]
+            if fe in vector_feats:
+                train_feat_df = extractor(train_feat_df, vec_model)
+                test_feat_df = extractor(test_feat_df, vec_model)
+            else:
+                train_feat_df = extractor(train_feat_df)
+                test_feat_df = extractor(test_feat_df)
+        if debug:
+            print('Saving feat df...')
+        train_feat_df.to_csv(train_filename)
+        test_feat_df.to_csv(test_filename)
     print('feature extraction time:', time_string(time.time()-f_time))
 
     # MODELS
     score_string = ''
+    model_results = {}
     for modelname in models:
         modelfile = os.path.join(outdir, modelname + '.model')
         if modelname == 'ground_truth':
@@ -233,7 +257,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             should_encode = False
             use_numpy = False
         elif stage_name == 'ordering':
-            should_encode = False
+            should_encode = True
             use_numpy = False
         else:
             should_encode = True # Should we encode labels
@@ -276,12 +300,15 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                 model = load(modelfile, 'torch')
             else:
                 model.fit(train_X, train_Y)
-                if modelname in ['neural']:
+                if modelname in ['neural', 'neurallinear']:
                     print('Saving model...')
                     save(model, modelfile, 'torch')
 
             # RUN MODEL
-            y_pred = model.predict(test_X)
+            if modelname == 'hyperopt':
+                y_pred = model.predict(test_X, test_Y)
+            else:
+                y_pred = model.predict(test_X)
         print('time for model', modelname, ':', time_string(time.time()-m_time))
 
         # Save results to dataframe
@@ -299,11 +326,35 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         score_string += modelname
         for metric in metrics:
             metric_func = metric_map[metric]
-            # TODO: do we need to convert these back to text labels?
-            score = metric_func(y_true, y_pred)
+            if metric == 'gpr':
+                score = metric_func(y_true, y_pred, test_df)
+            else:
+                # TODO: do we need to convert these back to text labels?
+                score = metric_func(y_true, y_pred)
             print(metric, score)
             score_string += '\t' + metric + ': ' + str(score)
+
+            if metric == 'poa':
+                ind_scores = metric_func(y_true, y_pred, avg=False)
+                if metric not in model_results:
+                    model_results[metric] = []
+                model_results[metric].append(ind_scores)
+
+                # Score grouped POA
+                poa_score = metric_func(y_true, y_pred, eps=0.01)
+                print(metric, poa_score)
+                score_string += '\t' + metric + ' (0.01): ' + str(score)
         score_string += '\n'
+
+    # Calculate statistical significance
+    if len(models) > 1:
+        for metric_name in model_results.keys():
+            print(str(model_results))
+            print('Stat sig for metric:', metric_name)
+            set_1 = model_results[metric_name][0]
+            set_2 = model_results[metric_name][1]
+            tval, pval = ttest_rel(set_1, set_2)
+            print('pval:', pval)
 
     return score_string, train_feat_df, test_feat_df
 
@@ -315,6 +366,8 @@ def check_alignment(ids, X, Y):
         y_row = Y[index]
         if not len(x_row) == len(y_row):
             print('ERROR: feature/label mismatch:', recid, 'has', len(x_row), 'features and', len(y_row), 'labels')
+            print('feats:', str(x_row))
+            print('labels:', str(y_row))
         assert(len(x_row) == len(y_row))
 
 

@@ -233,18 +233,22 @@ def is_datetime(text):
     timex_element: the xml element representing a TIMEX
     dct: a datetime object representing the DCT
 '''
-def time_value(timex_element):
+def time_value(timex_element, dct_string=None, return_text=False):
     time_string = timex_element.text
     dct = None
-    if 'dct' in timex_element.attrib:
+    if dct_string is None and 'dct' in timex_element.attrib:
         dct_string = timex_element.attrib['dct']
+    if dct_string is not None:
         if is_datetime(dct_string):
             dct = to_date(dct_string)
     if is_datetime(time_string):
         iso_datetime = to_date(time_string, dct)
         return iso_datetime.isoformat()
     else:
-        return timex_element.text
+        if return_text:
+            return timex_element.text
+        else:
+            return None
 
 
 '''

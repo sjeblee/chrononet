@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 
-ORIG = ['docid', 'text', 'tags', 'events', 'event_ranks' 'diagnosis']
+ORIG = ['docid', 'text', 'tags', 'events', 'event_ranks' 'diagnosis', 'dct']
 SEQ = ['docid', 'seqid', 'text', 'seq', 'seq_labels']
-ORDER = ['docid', 'text', 'seq', 'seq_labels', 'events', 'event_ranks', 'diagnosis']
+ORDER = ['docid', 'text', 'tags', 'seq', 'seq_labels', 'events', 'event_ranks', 'diagnosis', 'dct']
 RELATION = ['docid', 'relid' 'entity1', 'entity2', 'rel_type']
 
 def orig():
