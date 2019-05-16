@@ -52,6 +52,8 @@ class DataAdapterVA(DataAdapter):
             row['diagnosis'] = child.find('cghr_cat').text
             date_node = child.find('DeathDate')
             if date_node is None:
+                date_node = child.find('Death_YR_Month')
+            if date_node is None:
                 date_node = child.find('InterviewDate')
             row['dct'] = date_node.text
             df = df.append(row, ignore_index=True)
