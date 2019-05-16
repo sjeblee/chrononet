@@ -48,6 +48,7 @@ def kendalls_tau(true_ranks, pred_ranks, avg=True):
 
 
 ''' Calculate the mean squared error of the predicted ranks
+    Scale the ranks to 0-1
 '''
 def rank_mse(true_ranks, pred_ranks):
     print('rank_mse: true:', len(true_ranks), 'pred:', len(pred_ranks))
@@ -55,13 +56,35 @@ def rank_mse(true_ranks, pred_ranks):
         print('ERROR: length mismatch of true and pred ranks')
     assert(len(true_ranks) == len(pred_ranks))
     mse_scores = []
+
+    # Decide whether or not to scale the ranks
+    scale_pred = False
+    scale_true = False
+    pred_vals = [item for sublist in pred_ranks for item in sublist]
+    true_vals = [item for sublist in true_ranks for item in sublist]
+    if max(pred_vals) > 1:
+        scale_pred = True
+    if max(true_vals) > 1:
+        scale_true = True
+
+    print('MSE scaling: true_ranks:', scale_true, 'pred_ranks:', scale_pred)
+
     for n in range(len(true_ranks)):
         print('entry types: true:', type(true_ranks[n]), len(true_ranks[n]), 'pred:', type(pred_ranks[n]), len(pred_ranks[n]))
+        # Scale the ranks if needed
+        if scale_true:
+            true_n = scale_ranks(true_ranks[n])
+        else:
+            true_n = true_ranks[n]
+        if scale_pred:
+            pred_n = scale_ranks(pred_ranks[n])
+        else:
+            pred_n = pred_ranks[n]
         num_samples = len(true_ranks[n])
         assert(num_samples == len(pred_ranks[n]))
         error_sum = 0
         for x in range(num_samples):
-            error_sum += (true_ranks[n][x] - pred_ranks[n][x]) ** 2
+            error_sum += (true_n[x] - pred_n[x]) ** 2
         mse_scores.append(error_sum/float(num_samples))
     return numpy.average(numpy.asarray(mse_scores))
 
@@ -190,6 +213,12 @@ def str_pair(event_pair):
     return event_pair[0].attrib['eid'] + ' ' + event_pair[0].text + ' ' + event_pair[1].attrib['eid'] + ' ' + event_pair[1].text
 
 
+def scale_ranks(rank_list):
+    n = len(rank_list)
+    new_ranks = []
+    for rank in rank_list:
+        new_ranks.append(float(rank)/float(n))
+    return new_ranks
 
 
 ''' Score relations pairs against gold standard relation pairs
@@ -260,6 +289,6 @@ def score_relation_pairs(pred_pairs, pred_labels, true_pairs, true_labels):
     avg_recall = numpy.average(doc_recalls, weights=doc_true_pairs)
     for key in doc_class_recalls.keys():
         avg_class_recall = numpy.average(numpy.asarray(doc_class_recalls[key]))
-        print('Recall', key, str(avg_class_recall), 'num=', str(doc_class_totals[key]))
+        print('GPR Recall', key, str(avg_class_recall), 'num=', str(doc_class_totals[key]))
 
     return avg_recall
