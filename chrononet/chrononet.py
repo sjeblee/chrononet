@@ -198,7 +198,13 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
     labelname = test_data_adapter.get_labelname(stage_name)
     vec_model = None
     dim = 1024
-    print('Running stage: ', stage_name, 'with models:', str(models), 'and feats:', str(features))
+
+    # Load model params from config
+    stage_params = config._sections[stage_name + '_params']
+
+    print('Running STAGE: ', stage_name, 'with models:', str(models), 'and feats:', str(features))
+    for entry in stage_params.keys():
+        print('param:', entry, stage_params[entry])
 
     if vecfile is not None:
         print('loading vectors:', vecfile)
@@ -206,14 +212,12 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
     print('dim:', str(dim))
 
     # FEATURE EXTRACTION
-
     f_time = time.time()
     train_filename = os.path.join(outdir, inter_prefix + 'train_df_' + stage_name + '_feats.csv')
     test_filename = os.path.join(outdir, inter_prefix + 'test_df_' + stage_name + '_feats.csv')
-    if os.path.exists(train_filename) and os.path.exists(test_filename):
-        if debug: print('Loading feat dfs...')
+    if os.path.exists(train_filename):
+        if debug: print('Loading train feat df...')
         train_feat_df = pandas.read_csv(train_filename)
-        test_feat_df = pandas.read_csv(test_filename)
         '''
         for i, row in train_feat_df.iterrows():
             row_feats = ast.literal_eval(row['feats'])
@@ -223,20 +227,34 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             row['feats'] = ast.literal_eval(row['feats'])
         '''
     else:
-        if debug: print('Extracting features...')
+        if debug: print('Extracting train features...')
         train_feat_df = train_df.copy()# data_util.create_df(train_df)
-        test_feat_df = test_df.copy()
+
         for fe in features:
             extractor = fe_map[fe]
             if fe in vector_feats:
                 train_feat_df = extractor(train_feat_df, vec_model)
-                test_feat_df = extractor(test_feat_df, vec_model)
             else:
                 train_feat_df = extractor(train_feat_df)
+        if debug:
+            print('Saving train feat df...')
+        train_feat_df.to_csv(train_filename)
+
+    # Load test features
+    if os.path.exists(test_filename):
+        if debug: print('Loading test feat df...')
+        test_feat_df = pandas.read_csv(test_filename)
+    else:
+        if debug: print('Extracting test features...')
+        test_feat_df = test_df.copy()
+        for fe in features:
+            extractor = fe_map[fe]
+            if fe in vector_feats:
+                test_feat_df = extractor(test_feat_df, vec_model)
+            else:
                 test_feat_df = extractor(test_feat_df)
         if debug:
-            print('Saving feat df...')
-        train_feat_df.to_csv(train_filename)
+            print('Saving test feat df...')
         test_feat_df.to_csv(test_filename)
     print('feature extraction time:', time_string(time.time()-f_time))
 
@@ -250,14 +268,14 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         else:
             model_factory = model_map[modelname]
             if model_factory.requires_dim:
-                model = model_factory.get_model(dim)
+                model = model_factory.get_model(dim, stage_params)
             else:
-                model = model_factory.get_model()
+                model = model_factory.get_model(stage_params)
         if modelname == 'crf' or modelname == 'ground_truth':
             should_encode = False
             use_numpy = False
         elif stage_name == 'ordering':
-            should_encode = True
+            should_encode = False
             use_numpy = False
         else:
             should_encode = True # Should we encode labels
@@ -315,6 +333,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         test_feat_df = data_util.add_labels(test_feat_df, y_pred, labelname)
         check_alignment(test_ids, test_Y, y_pred)
 
+        # Collapse labels for sequence task
         if stage_name == 'sequence':
             y_pred = data_util.collapse_labels(y_pred)
             y_true = data_util.collapse_labels(test_Y)
@@ -371,6 +390,11 @@ def check_alignment(ids, X, Y):
         assert(len(x_row) == len(y_row))
 
 
+''' Save the model to a file
+    model: the model object
+    modefile: the file path to save the model to
+    model_type: torch or sklearn
+'''
 def save(model, modelfile, model_type):
     if model_type == 'torch':
         torch.save(model, modelfile)

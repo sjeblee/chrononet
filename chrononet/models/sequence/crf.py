@@ -6,7 +6,7 @@ from sklearn_crfsuite import CRF
 from models.model_base import ModelBase, ModelFactory
 
 class CRFfactory(ModelFactory):
-    def get_model():
+    def get_model(params):
         return CRFmodel()
 
 class CRFmodel(ModelBase):

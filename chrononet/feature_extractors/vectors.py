@@ -150,11 +150,20 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=True, context_size=10):
         tags = data_util.load_xml_tags(row['tags'], decode=False)
         # Create timeid map
         timex_map = {}
+        signal_map = {}
+        # TIMEX map
         for timex in tags.findall('TIMEX3'):
             tid = timex.get('id')
             if tid is None:
                 tid = timex.get('tid')
             timex_map[tid] = timex
+        # SIGNAL map
+        for sig in tags.findall('SIGNAL'):
+            sid = sig.get('id')
+            if sid is None:
+                sid = sig.get('sid')
+            signal_map[sid.lower()] = sig
+            print('sid:', sid.lower())
 
         # Get the DCT (death date for VA)
         dct_string = row['dct']
@@ -183,6 +192,7 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=True, context_size=10):
             time_id_string = event.get('relatedToTime')
             time_words = None
             time_val = None
+            tflags = []
             if time_id_string is not None:
                 time_id = time_id_string.split(',')[0] # Just get the first time phrase
                 if time_id not in timex_map:
@@ -206,11 +216,25 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=True, context_size=10):
                         time_val = [date, time]
                     #else:
                     time_words = data_util.split_words(time_text)
+                    for tw in time_words:
+                        tflags.append(1)
+
+                    # Get SIGNAL text
+                    signal_id = event.get('signalID')
+                    if signal_id is not None:
+                        signal = signal_map[signal_id.lower()]
+                        signal_text = signal.text
+                        signal_words = data_util.split_words(signal_text)
+                        sflags = []
+                        for sw in signal_words:
+                            sflags.append(0)
+                        time_words = signal_words + time_words # Add signal words to time phrase
+                        tflags = sflags + tflags # Append time word flags
 
             #vec = data_util.split_words(event_text)
             vec, context, c_flags = context_words(prev, event_text, next, max_len=context_size)
             #words, word_flags = context_words(prev, event_text, next)
-            event_vecs.append((vec, context, time_words, time_val, c_flags))
+            event_vecs.append((context, c_flags, time_words, tflags, time_val))
         df.at[i, 'feats'] = event_vecs
     return df
 
