@@ -26,7 +26,7 @@ fe_map = {'relations': relations.extract_relations, 'syntactic': syntactic.sent_
           'event_vectors': vectors.event_vectors, 'elmo_vectors': vectors.elmo_event_vectors, 'none': numpyer.dummy_function}
 vector_feats = ['event_vectors']
 model_map = {'crf': CRFfactory, 'random': RandomOrderFactory, 'mention': MentionOrderFactory, 'neural': NeuralOrderFactory, 'neurallinear': NeuralLinearFactory, 'hyperopt': HyperoptNeuralOrderFactory}
-metric_map = {'p': eval_metrics.precision, 'r': eval_metrics.recall, 'f1': eval_metrics.f1,
+metric_map = {'p': eval_metrics.precision, 'r': eval_metrics.recall, 'f1': eval_metrics.f1, 'mae': ordering_metrics.rank_mae,
               'mse': ordering_metrics.rank_mse, 'poa': ordering_metrics.rank_pairwise_accuracy, 'tau': ordering_metrics.kendalls_tau,
               'epr': ordering_metrics.epr, 'gpr': ordering_metrics.gpr}
 debug = True
@@ -117,13 +117,15 @@ def main():
     if 'ordering' in config:
         train_filename = os.path.join(outdir, inter_prefix + 'train_df_order.csv')
         test_filename = os.path.join(outdir, inter_prefix + 'test_df_order.csv')
-        if os.path.exists(train_filename) and os.path.exists(test_filename):
+        if os.path.exists(train_filename):
             if debug:
                 print('Loading ordering df...')
             order_train_df = pandas.read_csv(train_filename)
-            order_test_df = pandas.read_csv(test_filename)
         else:
             order_train_df = train_data_adapter.to_order(train_df, orig_train_df)
+        if os.path.exists(test_filename):
+            order_test_df = pandas.read_csv(test_filename)
+        else:
             order_test_df = test_data_adapter.to_order(test_df, orig_test_df)
         if save_intermediate:
             if debug:
@@ -262,6 +264,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
     score_string = ''
     model_results = {}
     for modelname in models:
+        print('Running', modelname)
         modelfile = os.path.join(outdir, modelname + '.model')
         if modelname == 'ground_truth':
             model = None
@@ -277,6 +280,8 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         elif stage_name == 'ordering':
             should_encode = False
             use_numpy = False
+            if modelname == 'neurallinear':
+                should_encode = True
         else:
             should_encode = True # Should we encode labels
             use_numpy = True # Should we use numpy to encode the features
@@ -322,10 +327,20 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                     print('Saving model...')
                     save(model, modelfile, 'torch')
 
-            # RUN MODEL
+            # RUN MODE
+            # TEMP: load second model
+            if stage_name == 'ordering':
+                modelfile2 = '/u/sjeblee/research/data/thyme/chrono/order_test_gru_context_time/neurallinear.model'
+                print('Loading pretrained model 2:', modelfile2)
+                model2 = load(modelfile2, 'torch')
+                y_pred2 = model2.predict(test_X)
+
             if modelname == 'hyperopt':
                 y_pred = model.predict(test_X, test_Y)
             else:
+                if model in ['neurallinear']:
+                    y_pred, encodings = model.predict(test_X, return_encodings=True)
+                    # TODO: save encodings to the dataframe
                 y_pred = model.predict(test_X)
         print('time for model', modelname, ':', time_string(time.time()-m_time))
 
@@ -353,20 +368,29 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             print(metric, score)
             score_string += '\t' + metric + ': ' + str(score)
 
-            if metric == 'poa':
+            if metric in ['poa', 'tau']:
                 ind_scores = metric_func(y_true, y_pred, avg=False)
                 if metric not in model_results:
                     model_results[metric] = []
                 model_results[metric].append(ind_scores)
 
+                # TEMP: stat sig
+                if stage_name == 'ordering':
+                    ind_scores2 = metric_func(y_true, y_pred2, avg=False)
+                    model_results[metric].append(ind_scores2)
+
                 # Score grouped POA
-                poa_score = metric_func(y_true, y_pred, eps=0.01)
-                print(metric, poa_score)
-                score_string += '\t' + metric + ' (0.01): ' + str(score)
+                #poa_score = metric_func(y_true, y_pred, eps=0.01)
+                #print(metric, poa_score)
+                #score_string += '\t' + metric + ' (0.01): ' + str(score)
         score_string += '\n'
 
     # Calculate statistical significance
-    if len(models) > 1:
+    stat_sig = False
+    if stage_name == 'ordering':
+        stat_sig = True
+    #if len(models) > 1:
+    if stat_sig:
         for metric_name in model_results.keys():
             print(str(model_results))
             print('Stat sig for metric:', metric_name)
@@ -406,7 +430,7 @@ def save(model, modelfile, model_type):
 
 def load(modelfile, model_type):
     if model_type == 'torch':
-        return torch.load(modelfile)
+        return torch.load(modelfile, map_location="cuda:3")
     elif model_type == 'sklearn':
         return joblib.load(modelfile)
     else:

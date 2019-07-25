@@ -32,7 +32,7 @@ class NeuralOrderModel(ModelBase):
     def fit(self, X, Y):
         self.model.fit(X, Y, num_epochs=self.epochs)
 
-    def predict(self, X, group_thresh=0.2):
+    def predict(self, X, group_thresh=0.1):
         if group_thresh is not None:
             self.model.group_thresh = group_thresh
         return self.model.predict(X)

@@ -17,7 +17,7 @@ debug = True
 tdevice = 'cpu'
 use_cuda = torch.cuda.is_available()
 if use_cuda:
-    tdevice = torch.device('cuda:2')
+    tdevice = torch.device('cuda:3')
 
 # GRU with GRU encoder, input: (conversations (1), utterances, words, embedding_dim)
 class GRU_GRU(nn.Module):
@@ -50,6 +50,7 @@ class GRU_GRU(nn.Module):
         for row in input:
             # ELMo embedding for each event (sequence of words)
             context = row[0]
+            print(context)
             word_flags = row[1]
             time_words = row[2]
             tflags = row[3]
@@ -64,7 +65,7 @@ class GRU_GRU(nn.Module):
 
             # Append the target flags
             c_flags = torch.tensor(word_flags, dtype=torch.float, device=tdevice).view(1, -1, 1)
-            print('X:', uttX.size(), 'c_flags:', c_flags.size())
+            #print('X:', uttX.size(), 'c_flags:', c_flags.size())
             uttX = torch.cat((uttX, c_flags), dim=2)
 
             # Create a tensor
@@ -91,9 +92,9 @@ class GRU_GRU(nn.Module):
                     #print('time tensor:', time_X.size())
 
                     # Add the flags
-                    print('tflags:', str(tflags), 'twords:', time_words)
+                    #print('tflags:', str(tflags), 'twords:', time_words)
                     t_flags = torch.tensor(tflags, dtype=torch.float, device=tdevice).view(1, -1, 1)
-                    print('time X:', time_X.size(), 't_flags:', t_flags.size())
+                    #print('time X:', time_X.size(), 't_flags:', t_flags.size())
                     time_X = torch.cat((time_X, t_flags), dim=2)
 
                     time_encoding, hn_t = self.gru_time(time_X, hn_t) # should be (1, #words, encoding_dim)
@@ -306,7 +307,7 @@ class GRU_GRU(nn.Module):
                 del batchY
         print("GRU_GRU training took", str(time.time()-start), "s")
 
-    def predict(self, testX, X2=None, batch_size=1, keep_list=True):
+    def predict(self, testX, X2=None, batch_size=1, keep_list=True, return_encodings=False):
         # Test the Model
         print_every = 1000
         pred = []
@@ -359,7 +360,7 @@ class SetToSequence_encoder(nn.Module):
 
         self.read_cycles = read_cycles
         self.input_size = input_size # word vector dim
-        self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
+        self.elmo = Elmo(options_file, weight_file, 1, dropout=0, requires_grad=False).to(tdevice)
         print('encoder input_size:', input_size)
         self.encoding_size = encoding_size
         self.context_encoding_size = context_encoding_size
@@ -425,21 +426,24 @@ class SetToSequence_encoder(nn.Module):
 
             # Context encoding
             if self.context_encoding_size > 0:
+                print('words:', context)
                 character_ids = batch_to_ids([context]).to(tdevice)
                 embeddings = self.elmo(character_ids)['elmo_representations']
                 #print('elmo embeddings:', len(embeddings))
                 X = embeddings[0].double()
                 X = X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
+                #print('elmo word:', X[0, 0, 0:5])
 
                 # Append the target flags
                 c_flags = torch.tensor(word_flags, dtype=torch.float64, device=tdevice).view(1, -1, 1)
-                print('X:', X.size(), 'c_flags:', c_flags.size())
+                #print('X:', X.size(), 'c_flags:', c_flags.size())
                 X = torch.cat((X, c_flags), dim=2)
 
                 #print('context tensor:', X.size())
                 encoding_c, hn_c = self.gru0(X, hn_c) # should be (1, #words, encoding_dim)
                 context_enc = encoding_c[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
                 to_concat.append(context_enc)
+                #print('context_enc:', context_enc)
 
             # Time phrase encoding
             if self.time_encoding_size > 0:
@@ -453,9 +457,9 @@ class SetToSequence_encoder(nn.Module):
                     #print('time tensor:', time_X.size())
 
                     # Add the flags
-                    print('tflags:', str(tflags), 'twords:', time_words)
+                    #print('tflags:', str(tflags), 'twords:', time_words)
                     t_flags = torch.tensor(tflags, dtype=torch.float64, device=tdevice).view(1, -1, 1)
-                    print('time X:', time_X.size(), 't_flags:', t_flags.size())
+                    #print('time X:', time_X.size(), 't_flags:', t_flags.size())
                     time_X = torch.cat((time_X, t_flags), dim=2)
 
                     time_encoding, hn_t = self.gru_time(time_X, hn_t) # should be (1, #words, encoding_dim)
@@ -471,20 +475,23 @@ class SetToSequence_encoder(nn.Module):
                 time_enc = torch.cat((time_emb, time_enc), dim=0)
                 '''
                 to_concat.append(time_emb)
+                #print('time_enc:', time_emb)
 
             # Structured features
             #flag_tensor = torch.tensor(flags, dtype=torch.float64, device=tdevice)
 
             # Concatenate the features
             event_vector = torch.cat(to_concat, dim=0)
-            #print('event_vector size:', event_vector.size())
+            print('event_vector size:', event_vector.size(), event_vector)
+            if torch.max(torch.isnan(event_vector)).item() > 0:
+                event_vector = torch.zeros(self.hidden_size, dtype=torch.float64, device=tdevice)
+                print('WARNING: event vector with nan set to 0')
             encodings.append(event_vector)
             index += 1
 
         mem_block = torch.stack(encodings)
-        print('mem_block size:', mem_block.size())
         mem_block = mem_block.view(-1, self.hidden_size) # Treat whole conversation as a batch (n, enc_size*2)
-        #print('mem_block:', mem_block.size())
+        print('mem_block:', mem_block.size())
 
         # Feed input into the encoder
         mem_size = mem_block.size(0)
@@ -492,14 +499,25 @@ class SetToSequence_encoder(nn.Module):
         for t in range(self.read_cycles):
             # Calculate attention matrix
             e_list = []
+            #print('h_t:', h_t)
 
             for i in range(mem_size): # For each event encoding
                 e_ti = self.bilinear(mem_block[i], h_t.squeeze())
                 e_list.append(e_ti)
+            #print('e_list:', e_list)
             e_matrix = torch.stack(e_list).view(1, -1)
-            #print('e_matrix:', e_matrix.size())
+            #print('e_matrix', e_matrix)
             attention_matrix = self.softmax(e_matrix).squeeze()
             #print('attention:', attention_matrix.size(), attention_matrix)
+
+            # Print encoder attention values
+            attn_string = ''
+            if mem_size == 1:
+                attn_string = attn_string + str(attention_matrix.item()) + ','
+            else:
+                for e_num in range(attention_matrix.size(0)):
+                    attn_string = attn_string + str(attention_matrix[e_num].item()) + ','
+            print(attn_string)
 
             if mem_size == 1:
                 s_t = torch.mul(mem_block, attention_matrix.item())
@@ -894,10 +912,10 @@ class SetToSequenceGroup_decoder(nn.Module):
             e_ti = self.bilinear(mem_block[i], h_t.squeeze())
             e_list.append(e_ti)
         e_matrix = torch.stack(e_list).squeeze()
-        #print('dec attention:', attention_matrix.size(), attention_matrix)
 
         # Force the model to choose a new item that hasn't already been chosen
         attention_matrix = self.logsoftmax(e_matrix.view(1, -1)).squeeze()
+        #print('dec attention:', attention_matrix.size(), attention_matrix)
         #if train:
         mask_matrix = attention_matrix
         #else:
@@ -997,8 +1015,8 @@ class SetToSequenceGroup:
         #group_optimizer = optim.Adam(self.group.parameters(), lr=group_learning_rate)
 
         # Loss function
-        #criterion = nn.KLDivLoss()
-        criterion = nn.MSELoss()
+        criterion = nn.KLDivLoss()
+        #criterion = nn.MSELoss()
         #criterion = nn.BCEWithLogitsLoss()
         #criterion = nn.MultiLabelSoftMarginLoss()
         #group_criterion = nn.BCELoss()
@@ -1069,6 +1087,7 @@ class SetToSequenceGroup:
                     correct_indices.reverse()
 
                 num_timesteps = len(correct_indices)
+                print('num timesteps:', num_timesteps)
                 #if i==0: print('correct_indices:', correct_indices)
                 done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
                 current_rank = []
@@ -1080,6 +1099,7 @@ class SetToSequenceGroup:
                 output_probs = []
                 target_probs = []
                 for di in range(num_timesteps):
+                    print('di:', di)
                     index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask, train=True)
                     #print('di:', di, 'mask:', done_mask)
                     output_probs.append(log_probs)
@@ -1130,7 +1150,7 @@ class SetToSequenceGroup:
                         for val in correct_indices[di]:
                             target_tensor[val] = 1.0
                             #target_tensor[val][0] = 0.0
-                        print('corr:', correct_indices[di], 'target_tensor:', target_tensor)
+                        #print('corr:', correct_indices[di], 'target_tensor:', target_tensor)
                     target_tensor = target_tensor.view(1, seq_length)
                     target_probs.append(target_tensor)
                     #print(di, 'target:', target_tensor)
@@ -1154,17 +1174,22 @@ class SetToSequenceGroup:
                 #output_ranks = indices_to_ranks(output_indices)
                 #if i==0: print('output_indices:', output_indices)
 
-                output_tensor = torch.stack(output_probs).view(-1, seq_length)
+                output_tensor = torch.stack(output_probs)
+                #print('output_probs:', output_tensor.size())
+                output_tensor = output_tensor.view(num_timesteps, seq_length)
                 if num_timesteps > 1:
-                    target_tensor = torch.stack(target_probs).view(-1, seq_length)
+                    target_tensor = torch.stack(target_probs)
+                    #print('target_probs:', target_tensor.size())
+                    target_tensor = target_tensor.view(num_timesteps, seq_length)
                     target_tensor = smooth_distribution(target_tensor, self.sigma)
                 else:
                     target_tensor = target_probs[0].view(1, -1)
 
                 #print('target:', target_tensor)
-                target_tensor = torch.log(target_tensor)
-                print('output tensor:', output_tensor)
-                print('target smoothed:', target_tensor)
+                #target_tensor = torch.log(target_tensor)
+                #print('output tensor:', output_tensor)
+                #print('target smoothed:', target_tensor)
+                print('output:', output_tensor.size(), 'target:', target_tensor.size())
 
                 loss = criterion(output_tensor, target_tensor)
 
