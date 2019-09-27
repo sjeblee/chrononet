@@ -22,7 +22,8 @@ class DataAdapterVA(DataAdapter):
         for child in root:
             row = {}
             row['docid'] = child.find('MG_ID').text
-            row['text'] = child.find('narrative').text.strip()
+            row['text'] = child.find('narrative').text
+            #row['text_orig'] = child.find('narrative').text
             #print('narrative:', row['text'])
             #row['tags'] = etree.tostring(child.find('narr_timeml_simple'), encoding='utf8').decode('utf8')
             tag_node = child.find('narr_timeml_simple')
@@ -61,10 +62,16 @@ class DataAdapterVA(DataAdapter):
 
     def write_output(self, df, outdir, doc_level=True):
         outfile = os.path.join(outdir, 'out.xml')
-        xmltree = self.seq_to_xml(df, tag="narr_crf", elementname="AdultAnonymous", id_name="MG_ID", doc_level=doc_level)
+        xmltree = None
+        if 'sequence' in self.stages:
+            xmltree = self.seq_to_xml(df, tag="narr_crf", elementname="AdultAnonymous", id_name="MG_ID", doc_level=doc_level)
 
         # Add event list if ordering was predicted
-        if 'event_ranks' in df:
+        if 'ordering' in self.stages:
             xmltree = self.add_ranks(xmltree, df, record_name='MG_ID')
+
+        # Add CoD classification to the xml file
+        if 'classification' in self.stages:
+            xmltree = self.class_to_xml(df, xmltree, tag='cghr_cat', elementname='AdultAnonymous', id_name='MG_ID')
 
         xmltree.write(outfile)

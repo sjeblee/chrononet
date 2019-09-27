@@ -44,9 +44,12 @@ def extract_pairs(xml_node, relation_set='exact', pairtype='ee', under=1):
     tlinks = xml_node.xpath("TLINK")
     if debug: print("events: ", str(len(events)), " times: ", str(len(times)), " tlinks: ", str(len(tlinks)))
     for event in events:
-        if 'eid' not in event.attrib:
+        if 'eid' not in event.attrib and 'id' not in event.attrib:
             print("no eid: ", etree.tostring(event))
-        event_id = event.attrib['eid']
+        if 'eid' in event.attrib:
+            event_id = event.attrib['eid']
+        else:
+            event_id = event.attrib['id']
 
         # Get the position of the event
         event_position = xml_node.index(event)
