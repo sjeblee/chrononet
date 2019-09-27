@@ -16,9 +16,9 @@ Setup:
 ## Usage:
 
 1. Convert data to a csv file according to the header in data_tools/data_scheme
-OR - extend data_adapter.py and create your own adapter to load and write to your desired data format.
+OR - extend `data_adapter.py` and create your own adapter to load and write to your desired data format.
 
-2. Create a config file including parameters for the models you want to run. See config_example_* for examples. 
+2. Create a config file including parameters for the models you want to run. See `config_example_*` for examples. 
 
     Stage options include:
 
@@ -32,7 +32,7 @@ OR - extend data_adapter.py and create your own adapter to load and write to you
 
 ## Temporal ordering models
 
-Temporal ordering models from the 2019 paper (see below) are in models/ordering/pytorch_models.py . The 'linear' model is called GRU_GRU, and the set2sequence model is called Set2Sequence.
+Temporal ordering models from the 2019 paper (see below) are in `models/ordering/pytorch_models.py`. The 'linear' model is called GRU_GRU, and the set2sequence model is called Set2SequenceGroup.
 
 ### Citation
 
