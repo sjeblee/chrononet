@@ -1,6 +1,8 @@
 # chrononet
 
 Dependencies:
+    numpy
+    networkx
     ListNet
 
 Setup:
