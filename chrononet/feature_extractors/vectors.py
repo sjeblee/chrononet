@@ -139,7 +139,7 @@ def word_vectors(df, vec_model):
 
 ''' Convert the dataframe feature column to a numpy array for processing
 '''
-def elmo_event_vectors(df, flatten=False, use_iso_value=True, context_size=10):
+def elmo_event_vectors(df, flatten=False, use_iso_value=True, context_size=5):
 
     df['feats'] = ''
     for i, row in df.iterrows():
@@ -236,6 +236,19 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=True, context_size=10):
             #words, word_flags = context_words(prev, event_text, next)
             event_vecs.append((context, c_flags, time_words, tflags, time_val))
         df.at[i, 'feats'] = event_vecs
+    return df
+
+
+''' Convert the dataframe feature column to a numpy array for processing
+'''
+def elmo_word_vectors(df):
+    df['feats'] = ''
+    for i, row in df.iterrows():
+        if debug: print('elmo words', str(i))
+        text = row['text']
+        print('narr text:', text)
+        words = data_util.split_words(text)
+        df.at[i, 'feats'] = words
     return df
 
 def elmo_vectors(elmo, prev, words, next, flags):

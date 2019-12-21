@@ -10,16 +10,74 @@ from lxml import etree
 from .data_adapter import DataAdapter
 from data_tools import data_util
 
-class DataAdapterThyme(DataAdapter):
+# Structs for json annotations
+def Struct(*fields):
+
+    class _Struct:
+        def __init__(self, *args):
+
+            if len(args) != len(fields):
+                raise IncompleteStruct(fields)
+
+            self.__dict__.update(zip(fields, args))
+
+    return _Struct
+
+class IncompleteStruct(Error):
+    "Expected {} fields: {}"
+
+    def create(self, doc, fields):
+        return doc.format(len(fields), ", ".join(fields))
+
+
+Annotation = Struct("tag", "features", "spans")
+Span = Struct("seqNo", "startIndex", "endIndex")
+
+class AnnotationSaveObject(Jsonable):
+
+    def __init__(self):
+        self.annotations = []
+
+    def fromObj(self, obj):
+        for item in obj:
+            #for tag, features, rawSpans in obj:
+            if type(item) is list or type(item) is tuple:
+                tag = item[0]
+                features = item[1]
+                rawSpans = item[2]
+                #print('fromObj:', tag, features, rawSpans)
+                spans = [Span(*rspan) for rspan in rawSpans]
+                #if len(spans) == 0:
+                #    print('WARNING: no spans found when loading:', tag, features)
+                self.annotations.append(Annotation(tag, features, spans))
+            else:
+                print('WARNING: annotation item is a not a tuple or list:', item)
+                self.annotations.append(item)
+
+    def json(self):
+        object = [[ann.tag, ann.features, [self.span_json(span) for span in ann.spans]] for ann in self.annotations]
+        return json.dumps(object)
+
+    def span_json(self, span):
+        return [span.seqNo, span.startIndex, span.endIndex]
+
+    def __str__(self):
+        return str(self.json())
+
+class DataAdapterVerilogue(DataAdapter):
 
     def load_data(self, filename, drop_unlabeled=True):
-        print('DataAdapterThyme.load_data', filename)
+        print('DataAdapterVerilogue.load_data', filename)
         df = pandas.DataFrame(columns=self.column_names)
         #df['diagnosis'] = ''
 
         # Loop through data entries and create a row for each record
         tree = etree.parse(filename)
         root = tree.getroot()
+        transcripts = root.find("transcripts")
+        ann_node = transcripts.find("annotations")
+        annObj = AnnotationSaveObject()
+
         for child in root:
             row = {}
             row['docid'] = child.find('record_id').text

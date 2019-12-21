@@ -14,6 +14,7 @@ import operator
 import pandas
 import re
 import subprocess
+import torch
 
 debug = True
 
@@ -23,9 +24,16 @@ debug = True
     # TODO
 
 def add_labels(df, labels, labelname):
+    print('add_labels:', len(labels), labels)
     df[labelname] = ''
     for i, row in df.iterrows():
-        df.at[i, labelname] = labels[i]
+        #print('add_labels i=', i)
+        if i < len(labels):
+            #print('add_labels labelname:', labelname, labels[i])
+            df.at[i, labelname] = labels[i]
+        else:
+            print('WARNING, add_labels i out of range:', i)
+
     return df
 
 def add_time_ids(event_elem, tag_elem):
@@ -51,6 +59,29 @@ def add_time_ids(event_elem, tag_elem):
             tid_string = ','.join(time_ids)
             event.set('relatedToTime', tid_string)
     return event_elem
+
+
+''' (In progress)
+'''
+def add_thyme_labels(filename, outfile):
+    brain = []
+    colon = []
+    xmltree = etree.parse(filename)
+    root = xmltree.getroot()
+    for child in root:
+        idname = child.get('record_id').text.split('_')[0]
+        id = idname[2:]
+        if int(id) in brain:
+            label = 'brain_cancer'
+        elif int(id) in colon:
+            label = 'colon_cancer'
+        else:
+            print('WARNING: id not found:', id)
+            label = 'none'
+        labelnode = etree.SubElement(child, 'diagnosis')
+        labelnode.text = label
+    etree.write(outfile)
+
 
 def create_df(df):
     return pandas.DataFrame(columns=['ID'])
@@ -213,6 +244,17 @@ def generate_permutations(ids, x, y):
     return new_ids, new_x, new_y
 
 
+def load_time_pairs(filename):
+    time_df = pandas.read_csv(filename, header=None, index_col=False)
+    time_df.columns = ['time1', 'time2', 'order']
+    pairs = []
+    labels = []
+    for i, row in time_df.iterrows():
+        pairs.append((split_words(row['time1']), split_words(row['time2'])))
+        labels.append(row['order'])
+    return pairs, labels
+
+
 def load_xml_tags(ann, unwrap=True, decode=False):
     #print('load_xml_tags:', ann)
     if decode:
@@ -227,6 +269,33 @@ def load_xml_tags(ann, unwrap=True, decode=False):
     #    print(ann_text[820:])
     ann_element = etree.fromstring("<root>" + ann_text + "</root>")
     return ann_element
+
+
+def reorder_encodings(encodings, orderings):
+    print('reorder encodings:', len(encodings), orderings)
+    assert(len(encodings) == len(orderings))
+    dim = encodings[0].size(-1)
+    new_encodings = []
+    for x in range(len(encodings)):
+        enc = encodings[x].view(-1, dim)
+        order = orderings[x]
+
+        indices = []
+        for y in range(len(order)):
+            indices.append((y, order[y]))
+        indices.sort(key=lambda k: k[1])
+        #shuffle(indices)
+        enc_list = []
+        for pair in indices:
+            rank = pair[1]
+            index = pair[0]
+            print('picking rank:', rank, 'at index:', index)
+            enc_list.append(enc[index])
+        new_enc = torch.stack(enc_list)
+        print('encodings size:', new_enc.size())
+        new_encodings.append(new_enc)
+
+    return new_encodings
 
 
 def score_majority_class(true_labs):

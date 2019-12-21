@@ -3,6 +3,7 @@
 
 import ast
 import re
+import numpy
 import pandas
 
 from lxml import etree
@@ -41,6 +42,8 @@ class DataAdapter:
     def get_labelname(self, stage_name):
         if stage_name == 'sequence':
             return 'seq_labels'
+        elif stage_name == 'encoding':
+            return 'time_order'
         elif stage_name == 'ordering':
             return 'event_ranks'
         elif stage_name == 'classification':
@@ -48,21 +51,26 @@ class DataAdapter:
         else:
             return None
 
-    def load_data(self, filename):
+    def load_data(self, filename, drop_unlabeled=True):
         df = pandas.DataFrame(columns=self.column_names)
         return df
 
     ''' Convert seq level df to doc level df
     '''
     def to_doc(self, df):
+        print('to_doc')
         doc_df = pandas.DataFrame(columns=data_scheme.seq())
         doc_map = {}
         for i, row in df.iterrows():
             docid = row['docid']
             text = row['text']
             orig_text = row['text_orig']
+            if 'diagnosis' in row:
+                diagnosis = row['diagnosis']
+            else:
+                diagnosis = ''
             if docid not in doc_map:
-                doc_map[docid] = {'docid': docid, 'seqid': 0, 'text': text, 'text_orig': orig_text, 'seq': [], 'seq_labels': []}
+                doc_map[docid] = {'docid': docid, 'seqid': 0, 'text': text, 'text_orig': orig_text, 'seq': [], 'seq_labels': [], 'diagnosis': diagnosis}
             else:
                 doc_map[docid]['text'] += ' ' + text
             row_seq = row['seq']
@@ -150,11 +158,16 @@ class DataAdapter:
         split_sents: True if each row should be a sentence, False if each row should be a record
     '''
     def to_seq(self, df, split_sents=False):
+        df = df.replace(numpy.nan, '', regex=True)
         seq_columns = data_scheme.seq()
         target_df = pandas.DataFrame(columns=seq_columns)
         for i, row in df.iterrows():
             print('to_seq row:', str(row))
-            labeled_seqs = self.ann_to_seq(row['text'], row['tags'], split_sents)
+            labeled_seqs = []
+            if len(row['tags']) > 0:
+                labeled_seqs = self.ann_to_seq(row['text'], row['tags'], split_sents)
+            else:
+                labeled_seqs = self.ann_to_seq(row['text'], None, split_sents)
             if self.debug:
                 print('labeled_seqs:', len(labeled_seqs))
             sid = 0
@@ -172,6 +185,7 @@ class DataAdapter:
                 target_row['seq_labels'] = seq_labels
                 target_row['text'] = ' '.join(seq)
                 target_row['text_orig'] = row['text']
+                target_row['diagnosis'] = str(row['diagnosis'])
                 if self.debug:
                     print('adding feat row:', target_row['docid'], target_row['seqid'], target_row['text'], target_row['seq_labels'])
                 target_df = target_df.append(target_row, ignore_index=True)
@@ -187,8 +201,6 @@ class DataAdapter:
     '''
     def ann_to_seq(self, narr, ann, split_sents, ncrf=False):
         #print(type(ann))
-        ann_element = data_util.load_xml_tags(ann, decode=False, unwrap=True)
-        print('ann_element:', etree.tostring(ann_element).decode('utf8'))
         if ncrf:
             narr_ref = narr.replace('\n', '$')
             if split_sents:
@@ -198,41 +210,51 @@ class DataAdapter:
         print('narr_ref:', narr_ref)
         tags = []
         seqs = [] # a list of tuples (word, label)
-        for child in ann_element:
-            if child.tag in ['EVENT', 'TIMEX3']:
-                tags.append(Element(child))
-                if self.debug:
-                    print('element:', etree.tostring(child).decode('utf8'))
-        if self.debug:
-            print("tags: ", len(tags))
-        # Sort tags by span start
-        tags.sort(key=lambda x: x.start)
-        index = 0
-        for tag in tags:
-            print('- tag span:', tag.start, tag.end)
-            if tag.start < index:
-                print("WARNING: dropping overlapping reference tag")
-                continue
-            if tag.start > index:
-                text = narr_ref[index:tag.start]
-                index = tag.start
-                self.get_seqs(text, OO, seqs)
-            if tag.element.tag == 'EVENT':
-                label = BE
-            elif tag.element.tag == 'TIMEX3':
-                label = BT
-            for word in self.split_words(tag.element.text):
-                seqs.append((word, label))
-                if label == BE:
-                    label = IE
-                elif label == BT:
-                    label = IT
-            index = tag.end
 
-        # Add the tail of the narrative
-        if index < len(narr):
-            text = narr_ref[index:]
-            self.get_seqs(text, OO, seqs)
+        # Process unlabeled narratives
+        if ann is None:
+            for word in self.split_words(narr):
+                seqs.append((word, OO))
+        else:
+            ann_element = data_util.load_xml_tags(ann, decode=False, unwrap=True)
+            print('ann_element:', etree.tostring(ann_element).decode('utf8'))
+
+            for child in ann_element:
+                if child.tag in ['EVENT', 'TIMEX3']:
+                    tags.append(Element(child))
+                    if self.debug:
+                        print('element:', etree.tostring(child).decode('utf8'))
+            if self.debug:
+                print("tags: ", len(tags))
+            # Sort tags by span start
+            tags.sort(key=lambda x: x.start)
+
+            index = 0
+            for tag in tags:
+                print('- tag span:', tag.start, tag.end)
+                if tag.start < index:
+                    print("WARNING: dropping overlapping reference tag")
+                    continue
+                if tag.start > index:
+                    text = narr_ref[index:tag.start]
+                    index = tag.start
+                    self.get_seqs(text, OO, seqs)
+                if tag.element.tag == 'EVENT':
+                    label = BE
+                elif tag.element.tag == 'TIMEX3':
+                    label = BT
+                for word in self.split_words(tag.element.text):
+                    seqs.append((word, label))
+                    if label == BE:
+                        label = IE
+                    elif label == BT:
+                        label = IT
+                index = tag.end
+
+            # Add the tail of the narrative
+            if index < len(narr):
+                text = narr_ref[index:]
+                self.get_seqs(text, OO, seqs)
 
         # Split sentences
         if split_sents and not ncrf:
@@ -297,7 +319,7 @@ class DataAdapter:
                 #events = ast.literal_eval(events)
             if type(event_ranks) == str:
                 event_ranks = ast.literal_eval(event_ranks)
-            print('events:', len(events), 'ranks:', len(event_ranks))
+            #print('events:', len(events), 'ranks:', len(event_ranks))
             assert(len(events) == len(event_ranks))
             rank_event_pairs = list(zip(event_ranks, events))
 
@@ -314,8 +336,9 @@ class DataAdapter:
         return xmltree
 
     def closelabel(self, prevlabel, elem_text):
-        t_labels = ['BT', 'IT']
-        e_labels = ['BE', 'IE']
+        #print('closelabel', prevlabel, elem_text)
+        t_labels = [BT, IT]
+        e_labels = [BE, IE]
         text = ""
         if prevlabel in t_labels:
             text = elem_text.strip() + '</TIMEX3>'
@@ -328,7 +351,7 @@ class DataAdapter:
        tag: the name of the classification label to add to the xml
     '''
     def class_to_xml(self, df, xmltree=None, tag='cghr_cat', elementname="Record", id_name="record_id"):
-        if self.debug: print('class_to_xml')
+        if self.debug: print('class_to_xml', id_name)
 
         create = False
         if xmltree is None:
@@ -340,13 +363,28 @@ class DataAdapter:
 
         for i, row in df.iterrows():
             docid = row['docid']
+            #print('docid:', docid)
             cod = self.get_labelname('classification')
+            #print('create:', create)
             if create:
                 child = etree.SubElement(root, elementname)
                 id_node = etree.SubElement(child, id_name)
                 id_node.text = docid
             else:
-                print('TODO')
+                #search_string = "//" + elementname + "[@" + id_name + "='" + docid + "']"
+                #print('xpath string:', search_string)
+                #for elem in xmltree.iterfind(search_string):
+                #print('root:', etree.tostring(root))
+                for elem in root:
+                    #print('- checking', etree.tostring(elem))
+                    if elem.find(id_name).text == docid:
+                        child = elem
+                        print('found', child.get(id_name))
+                    break
+            # Remove the tag node if already exists so we can replace it
+            if child.find(tag) is not None:
+                child.remove(child.find(tag))
+                #print('removed previous element:', tag)
             class_node = etree.SubElement(child, tag)
             class_node.text = str(cod)
             #if self.debug: print("added seq: ", narr_node.text)
@@ -358,7 +396,7 @@ class DataAdapter:
        filename: optional, the xml file to add the sequences to. If blank, will create a new tree
        tag: the tag to use for new elements if creating a new tree
     '''
-    def seq_to_xml(self, df, filename=None, tag="narr_timeml", elementname="Record", id_name="record_id", doc_level=False):
+    def seq_to_xml(self, df, filename=None, tag="narr_timeml", elementname="Record", id_name="record_id", doc_level=False, diagnosis_name='cghr_cat'):
         if self.debug: print("seq_to_xml")
 
         tree = None
@@ -371,6 +409,7 @@ class DataAdapter:
             labels = row['seq_labels']
             if type(labels) == str:
                 labels = ast.literal_eval(labels)
+            #print('seq_labels:', labels)
             seq_labels = list(zip(seq, labels))
             child = etree.SubElement(root, elementname)
             id_node = etree.SubElement(child, id_name)
@@ -379,7 +418,10 @@ class DataAdapter:
             text_node.text = str(row['text_orig'])
             narr_node = etree.SubElement(child, tag)
             narr_node.text = self.to_xml(seq_labels)
-            #if self.debug: print("added seq: ", narr_node.text)
+            diagnosis_node = etree.SubElement(child, diagnosis_name)
+            diagnosis_node.text = str(row['diagnosis'])
+            if self.debug: print("added seq: ", narr_node.text)
+            print('diagnosis:', row['diagnosis'])
         tree = etree.ElementTree(root)
         return tree
 
@@ -391,7 +433,7 @@ class DataAdapter:
         prevlabel = OO
         in_elem = False
         for word, label in seq:
-            #print(word, label)
+            print(word, label)
             # Add xml tags if necessary
             if label == OO:
                 in_elem = False

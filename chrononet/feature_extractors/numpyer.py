@@ -26,10 +26,11 @@ def to_feats(df, use_numpy=True, doc_level=False):
             flist = ast.literal_eval(flist)
 
         feats.append(flist)
-        if debug:
-            print('to_feats: ', row['docid'], 'feats:', len(flist))
-            #if i == 0:
-            print('feats[0]:', type(flist[0]), flist[0])
+        #if debug:
+        #print('to_feats: ', row['docid'], 'feats:', len(flist))
+        if debug and i == 0:
+            if len(flist) > 0:
+                print('feats[0]:', type(flist[0]), flist[0])
     if use_numpy:
         return numpy.asarray(feats).astype('float')
     else:
@@ -82,13 +83,15 @@ def to_labels(df, labelname, labelencoder=None, encode=True):
     elif encode:
         if labelencoder is None:
             labelencoder = create_labelencoder(labels)
-        labels = df.apply(encode_labels(labels))
+        labels = encode_labels_plain(labels)
     if debug: print('to_labels:', labelname, 'encode:', encode, 'labels:', len(labels))
     return labels, labelencoder
 
 def create_labelencoder(data, num=0):
     global labelencoder, onehotencoder, num_labels
     if debug: print("create_labelencoder: data[0]: ", str(data[0]))
+    if type(data[0]) is list:
+        data = [j for sub in data for j in sub]
     labelencoder = LabelEncoder()
     labelencoder.fit(data)
     num_labels = len(labelencoder.classes_)
@@ -96,6 +99,20 @@ def create_labelencoder(data, num=0):
     #onehotencoder.fit(data2)
 
     return labelencoder
+
+
+def encode_labels_plain(data, labenc=None):
+    if labenc is None:
+        labenc = labelencoder
+    print('encode_labels_plain:', str(data))
+    if type(data[0]) is list:
+        new_lab = []
+        for item in data:
+            new_lab.append(labenc.transform(item))
+    else:
+        new_lab = labenc.transform(data)
+    #print('encoded labels:', new_lab)
+    return new_lab
 
 
 ''' Encodes labels as one-hot vectors (entire dataset: 2D array)
@@ -179,4 +196,7 @@ def dummy_function(df, doc_level=False):
                 fake_feats.append(0)
             df.at[i, 'feats'] = fake_feats
             print('dummy_function:', row['docid'], 'feats:', len(fake_feats))
+    return df
+
+def do_nothing(df, doc_level=False):
     return df

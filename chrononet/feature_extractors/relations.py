@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-# Data adapter for the THYME dataset
 
 import pandas
 
@@ -30,3 +29,125 @@ def extract_relations(df, target_df):
     # TODO: get relation objects from the tags column, create them as rows
 
     return target_df
+
+def extract_time_pairs(df):
+    df['feats'] = ''
+    df['time_order'] = ''
+    for i, row in df.iterrows():
+        #if debug: print('event_vectors', str(i))
+        events = etree.fromstring(row['events'])
+        text = row['text']
+        print('narr text:', text)
+        tags = data_util.load_xml_tags(row['tags'], decode=False)
+        ranks = row['event_ranks']
+        time_phrases = []
+        time_ranks = []
+        # Create timeid map
+        timex_map = {}
+        # TIMEX map
+        for timex in tags.findall('TIMEX3'):
+            tid = timex.get('id')
+            if tid is None:
+                tid = timex.get('tid')
+            timex_map[tid] = timex
+
+        for event_num in range(len(events)):
+            event = events[event_num]
+            rank = ranks[event_num]
+            # Get spans and attributes
+            #span = event.get('span').split(',')
+
+            # Get time phrase if there is one
+            time_id_string = event.get('relatedToTime')
+            time_words = None
+            if time_id_string is not None:
+                time_id = time_id_string.split(',')[0] # Just get the first time phrase
+                if time_id not in timex_map:
+                    print('WARNING: time_id not found:', time_id)
+                else:
+                    timex = timex_map[time_id]
+                    time_text = timex.text
+                    time_words = data_util.split_words(time_text)
+                    time_phrases.append(time_words)
+                    time_ranks.append(rank)
+        time_pairs = []
+        time_pair_orders = []
+        for tp in range(len(time_phrases)):
+            for tp2 in range(len(time_phrases)):
+                if not tp == tp2:
+                    time1 = time_phrases[tp]
+                    rank1 = time_ranks[tp]
+                    time2 = time_phrases[tp2]
+                    rank2 = time_ranks[tp2]
+                    time_pairs.append((time1, time2))
+                    label = 'SIMULTANEOUS'
+                    if rank1 < rank2:
+                        label = 'BEFORE'
+                    elif rank1 > rank2:
+                        label = 'AFTER'
+                    time_pair_orders.append(label)
+
+        df.at[i, 'feats'] = time_pairs
+        df.at[i, 'time_order'] = time_pair_orders
+    return df
+
+def extract_time_pairs_from_file(filename):
+    df['feats'] = ''
+    df['time_order'] = ''
+    for i, row in df.iterrows():
+        #if debug: print('event_vectors', str(i))
+        events = etree.fromstring(row['events'])
+        text = row['text']
+        print('narr text:', text)
+        tags = data_util.load_xml_tags(row['tags'], decode=False)
+        ranks = row['event_ranks']
+        time_phrases = []
+        time_ranks = []
+        # Create timeid map
+        timex_map = {}
+        # TIMEX map
+        for timex in tags.findall('TIMEX3'):
+            tid = timex.get('id')
+            if tid is None:
+                tid = timex.get('tid')
+            timex_map[tid] = timex
+
+        for event_num in range(len(events)):
+            event = events[event_num]
+            rank = ranks[event_num]
+            # Get spans and attributes
+            #span = event.get('span').split(',')
+
+            # Get time phrase if there is one
+            time_id_string = event.get('relatedToTime')
+            time_words = None
+            if time_id_string is not None:
+                time_id = time_id_string.split(',')[0] # Just get the first time phrase
+                if time_id not in timex_map:
+                    print('WARNING: time_id not found:', time_id)
+                else:
+                    timex = timex_map[time_id]
+                    time_text = timex.text
+                    time_words = data_util.split_words(time_text)
+                    time_phrases.append(time_words)
+                    time_ranks.append(rank)
+        time_pairs = []
+        time_pair_orders = []
+        for tp in range(len(time_phrases)):
+            for tp2 in range(len(time_phrases)):
+                if not tp == tp2:
+                    time1 = time_phrases[tp]
+                    rank1 = time_ranks[tp]
+                    time2 = time_phrases[tp2]
+                    rank2 = time_ranks[tp2]
+                    time_pairs.append((time1, time2))
+                    label = 'SIMULTANEOUS'
+                    if rank1 < rank2:
+                        label = 'BEFORE'
+                    elif rank1 > rank2:
+                        label = 'AFTER'
+                    time_pair_orders.append(label)
+
+        df.at[i, 'feats'] = time_pairs
+        df.at[i, 'time_order'] = time_pair_orders
+    return df
