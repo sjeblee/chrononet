@@ -72,7 +72,7 @@ class Data:
         self.feature_emb_dims = []
         self.norm_feature_embs = []
         self.word_emb_dim = 1024
-        self.char_emb_dim = 25
+        self.char_emb_dim = 32
 
         # Networks
         self.use_char = True
@@ -87,19 +87,19 @@ class Data:
         self.status = "train"
         # Hyperparameters
         self.HP_cnn_layer = 2
-        self.HP_iteration = 100
+        self.HP_iteration = 128
         self.HP_batch_size = 8
-        self.HP_char_hidden_dim = 50
-        self.HP_hidden_dim = 128
+        self.HP_char_hidden_dim = 64
+        self.HP_hidden_dim = 168
         self.HP_dropout = 0.1
         self.HP_lstm_layer = 1
         self.HP_bilstm = True
 
         self.HP_gpu = True
-        self.HP_lr = 0.015
+        self.HP_lr = 0.15
         self.HP_lr_decay = 0.05
         self.HP_clip = None
-        self.HP_momentum = 0
+        self.HP_momentum = 0.9
         self.HP_l2 = 1e-8
 
         # Added by Autoscribe

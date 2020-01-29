@@ -14,7 +14,7 @@ from scipy.stats import ttest_rel
 from sklearn.metrics import classification_report
 
 # Local imports
-from data_tools.adapters import data_adapter_thyme, data_adapter_va
+from data_tools.adapters import data_adapter_thyme, data_adapter_va, data_adapter_verilogue
 from data_tools import data_util
 from evaluation import eval_metrics, ordering_metrics
 from feature_extractors import numpyer, relations, syntactic, vectors
@@ -40,6 +40,7 @@ metric_map = {'p': eval_metrics.precision, 'r': eval_metrics.recall, 'f1': eval_
 debug = True
 
 time_modelfile = None
+tdevice = 'cuda:3'
 
 def main():
     argparser = argparse.ArgumentParser()
@@ -244,6 +245,8 @@ def get_data_adapter(dataname):
         return data_adapter_thyme.DataAdapterThyme(debug)
     elif dataname.lower() == 'va':
         return data_adapter_va.DataAdapterVA(debug)
+    elif dataname.lower() == 'verilogue':
+        return data_adapter_verilogue.DataAdapterVerilogue(debug)
 
 
 ''' Run one stage of chrononet
@@ -400,9 +403,11 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                 print('Wrote train time pairs to file')
             '''
             # Load extra time pairs for training
+            '''
             train_extra, labels_extra = data_util.load_time_pairs(stage_config['train_time_pairs'])
             train_X = train_extra #+ train_X
             train_Y = labelencoder.transform(labels_extra).tolist() #+ train_Y
+            '''
 
         # Get rank labels for joint ordering/classification model
         if order_classify:
@@ -536,7 +541,14 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             pred_labels = y_pred
         test_feat_df = data_util.add_labels(test_feat_df, pred_labels, labelname)
         test_data_adapter.stages.append(stage_name)
-        #check_alignment(test_ids, test_Y, y_pred)
+
+        # TEMP: Save the dataframe with predicted labels
+        outdir = config['data']['output_dir']
+        out_filename = os.path.join(outdir, inter_prefix + 'test_out.csv')
+        test_feat_df.to_csv(out_filename)
+
+        # Check that the correct and predicted labels are the same length
+        check_alignment(test_ids, test_Y, y_pred)
 
         if extra_train_df is not None:
             extra_train_df = data_util.add_labels(extra_train_df, extra_train_labels, labelname)
@@ -549,6 +561,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         else:
             y_true = test_Y
 
+        '''
         if stage_name == 'encoding':
             test_synth, labels_synth = data_util.load_time_pairs(stage_config['test_time_pairs'])
             test_synth = [[item] for item in test_synth] # Wrap each item in a list to de-linearize
@@ -561,6 +574,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                 metric_func = metric_map[metric]
                 score = metric_func(labels_synth, synth_pred)
                 print('synth test:', metric, score)
+        '''
 
         # EVALUATION
         score_string += modelname
@@ -615,6 +629,8 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
 
 
 def check_alignment(ids, X, Y):
+    print('ids:', len(ids), 'x:', len(X), 'y:', len(Y))
+    assert(len(X) == len(Y))
     for index in range(0, len(ids)):
         recid = ids[index]
         x_row = X[index]
@@ -642,7 +658,7 @@ def save(model, modelfile, model_type):
 
 def load(modelfile, model_type):
     if model_type == 'torch':
-        return torch.load(modelfile)
+        return torch.load(modelfile, map_location=tdevice) # TEMP
     elif model_type == 'sklearn':
         return joblib.load(modelfile)
     else:

@@ -9,20 +9,23 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from allennlp.modules.elmo import Elmo, batch_to_ids
+from collections import Counter
 from torch import optim
+from torchtext.vocab import Vocab
 from sklearn.utils import shuffle
 
 #from models.loss_functions import Kendall_Tau_Loss
 
 numpy.set_printoptions(threshold=numpy.inf)
 debug = True
-tdevice = 'cpu'
+#tdevice = 'cpu'
 use_cuda = torch.cuda.is_available()
+#use_cuda = False
 if use_cuda:
-    tdevice = torch.device('cuda:2')
+    tdevice = torch.device('cuda:3')
 options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
 weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
-ae_file = '/u/sjeblee/research/git/chrononet/chrononet/autoencoder.model'
+ae_file = '/nbb/sjeblee/data/va/chrono/ordergru_va_autoencoder_timeencoder/autoencoder.model'
 
 # GRU with GRU encoder, input: (conversations (1), utterances, words, embedding_dim)
 class GRU_GRU(nn.Module):
@@ -1387,20 +1390,21 @@ class OrderGRU(nn.Module):
         self.dropout = dropout_p
         self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
 
-        # TEMP so we don't have to re-train the autoencoder
-        #if os.path.exists(ae_file):
-        #    self.autoencoder = torch.load(ae_file)
-        self.use_autoencoder = False
+        self.use_autoencoder = True
 
         if self.use_autoencoder:
-            self.autoencoder = Autoencoder(input_size, encoding_size, self.elmo)
+            # TEMP so we don't have to re-train the autoencoder
+            if os.path.exists(ae_file):
+                self.autoencoder = torch.load(ae_file)
+            else:
+                self.autoencoder = Autoencoder(input_size, encoding_size, self.elmo)
         else:
             self.gru0 = nn.GRU(input_size+1, int(encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
-        self.gru1 = nn.GRU(hidden_size, hidden_size, bidirectional=True, dropout=dropout_p, batch_first=True)
+        self.gru1 = nn.GRU(hidden_size, int(hidden_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
         #self.gru_time = nn.GRU(self.input_size+1, int(self.time_encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
         print('time encoder file:', encoder_file)
         self.time_encoder = torch.load(encoder_file).model #TimeEncoder(self.input_size, self.time_encoding_size, self.elmo)
-        self.linear = nn.Linear(hidden_size*2, output_size)
+        self.linear = nn.Linear(hidden_size, output_size)
         self.softmax = nn.Softmax(dim=2)
 
     ''' Input is a list of lists of numpy arrays
@@ -1409,14 +1413,15 @@ class OrderGRU(nn.Module):
         # input expected as (events, words, embedding_dim)
         encodings = []
         hn = None
-        hn_t = None
+        hn_e = None
         index = 0
         #extra_size = 0
 
         # Mini-batching for memory saving
-        mini_batch = 8
+        mini_batch = 16
         i = 0
-        if not (is_test and len(input) > mini_batch):
+        #if not (is_test and len(input) > mini_batch):
+        if len(input) < mini_batch:
             mini_batch = len(input)
 
         output = None
@@ -1426,6 +1431,8 @@ class OrderGRU(nn.Module):
             if end > len(input):
                 end = len(input)
             input_batch = input[i:i+mini_batch]
+            print('mini_batch:', i, 'to', i+mini_batch, 'input_batch:', len(input_batch), 'should be', mini_batch)
+            encodings = []
 
             for row in input_batch:
                 # ELMo embedding for each event (sequence of words)
@@ -1436,6 +1443,7 @@ class OrderGRU(nn.Module):
                 tflags = row[3]
                 time_val = row[4]
                 to_concat = []
+
                 character_ids = batch_to_ids([context]).to(tdevice)
                 embeddings = self.elmo(character_ids)['elmo_representations']
                 #print('elmo embeddings:', len(embeddings))
@@ -1454,11 +1462,14 @@ class OrderGRU(nn.Module):
                 uttX = torch.tensor(uttXnp, dtype=torch.float, device=tdevice)
                 '''
 
-                #print('input tensor:', uttX)
-                #enc = self.autoencoder.encode(row).squeeze() # should be (1, encoding_dim)
+                # Event encoding
+                if self.use_autoencoder:
+                    print('ae input tensor:', uttX)
+                    enc = self.autoencoder.encode([row]).squeeze().detach() # should be (1, encoding_dim)
+                else:
+                    encoding, hn_e = self.gru0(uttX, hn_e)
+                    enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
 
-                encoding, _ = self.gru0(uttX)
-                enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
                 to_concat.append(enc)
                 if debug: print('enc:', str(enc.size()))
 
@@ -1512,18 +1523,21 @@ class OrderGRU(nn.Module):
                 index += 1
 
             conversation = torch.stack(encodings)
-            conversation = conversation.view(1, -1, self.hidden_size) # Treat whole conversation as a batch
             print('conversation:', conversation.size())
+            conversation = conversation.view(1, -1, self.hidden_size) # Treat whole conversation as a batch
+            print('conversation resized:', conversation.size())
             output_batch, hn = self.gru1(conversation, hn)
-            print('output_batch:', output_batch.size())
+            print('(mini) output_batch:', output_batch.size())
             out1_batch = self.linear(output_batch)
             if output is None:
                 output = output_batch
+            else:
+                output = torch.cat((output, output_batch), dim=1)
             if out1 is None:
                 out1 = out1_batch
-            print('output size:', output.size())
-            output = torch.cat((output, output_batch), dim=1)
-            out1 = torch.cat((out1, out1_batch), dim=1)
+            else:
+                out1 = torch.cat((out1, out1_batch), dim=1)
+            print('output size so far:', output.size())
             #out1 = self.softmax(self.linear(output))
 
             if is_test:
@@ -1613,7 +1627,8 @@ class OrderGRU(nn.Module):
             self = self.to(tdevice)
 
         # Train the autoencoder
-        #self.autoencoder.fit(X)
+        if self.use_autoencoder:
+            self.autoencoder.fit(X)
 
         # Train the model
         for epoch in range(num_epochs):
@@ -1674,7 +1689,10 @@ class OrderGRU(nn.Module):
 
                 if encoding_size > 0:
                     outputs, _ = self(batchX, batchX2)
-                    outputs = outputs.view(max_length, -1)
+                    #print('max_length:', max_length)
+                    outputs.squeeze(0)
+                    #outputs = outputs.view(max_length, -1)
+                    print('outputs:', outputs.size())
                 else:
                     print('ERROR: Encoding size is 0 and I dont know what to do')
                     #outputs = self(samples).view(max_length, -1)
@@ -1878,11 +1896,12 @@ class EncoderRNN(nn.Module):
         #nn.init.xavier_uniform(self.lstm.weight_ih_l0, gain=numpy.sqrt(2))
         #nn.init.xavier_uniform(self.lstm.weight_hh_l0, gain=numpy.sqrt(2))
 
-    def forward(self, row, return_emb=False):
+    def forward(self, input, return_emb=False):
         # Input should be (1, seq_len, dim)
+        row = input[0]
 
         context = row[0]
-        print(context)
+        print('ae enc context:', context)
         word_flags = row[1]
         time_words = row[2]
         tflags = row[3]
@@ -1905,6 +1924,7 @@ class EncoderRNN(nn.Module):
         #h0 = torch.FloatTensor(self.num_layers*2, 1, self.hidden_size).to(tdevice)
         #c0 = torch.FloatTensor(self.num_layers*2, 1, self.hidden_size).to(tdevice)
         encoded_input, self.hidden = self.lstm(uttX, self.hidden) # , (h0, c0))
+        encoded_input = encoded_input[:, -1, :].view(1, 1, -1) # Keep just the last timestep
         encoded_input = self.relu(encoded_input)
         if return_emb:
             return encoded_input, uttX
@@ -1917,54 +1937,89 @@ class DecoderRNN(nn.Module):
         self.hidden_size = hidden
         self.output_size = int(output_size/2)
         self.num_layers = num_layers
+        self.vocab = None
 
         #self.isCuda = isCuda
-        self.lstm = nn.GRU(input_size=hidden, hidden_size=self.output_size, batch_first=True, bidirectional=True).to(tdevice)
+        self.lstm = nn.GRU(input_size=1, hidden_size=self.hidden_size, batch_first=True, bidirectional=False).to(tdevice)
         #self.relu = nn.ReLU()
-        self.sigmoid = nn.Tanh().to(tdevice)
+        self.linear = nn.Linear(self.hidden_size, output_size).to(tdevice)
+        self.softmax = nn.LogSoftmax(dim=2).to(tdevice)
+        #self.sigmoid = nn.Tanh().to(tdevice)
 
         #initialize weights
         #nn.init.xavier_uniform(self.lstm.weight_ih_l0, gain=numpy.sqrt(2))
         #nn.init.xavier_uniform(self.lstm.weight_hh_l0, gain=numpy.sqrt(2))
 
-    def forward(self, encoded_input):
+    def forward(self, input_token, hidden):
+        #output = []
         #h0 = torch.FloatTensor(self.num_layers*2, encoded_input.size(0), self.output_size).to(tdevice)
         #c0 = torch.FloatTensor(self.num_layers*2, encoded_input.size(0), self.output_size).to(tdevice)
         #print('h0:', h0)
         #print('c0:', c0)
-        decoded_output, hidden = self.lstm(encoded_input) # , (h0, c0))
-        print('decoded_output:', decoded_output)
-        decoded_output = self.sigmoid(decoded_output)
-        return decoded_output
+        dec_input_token = input_token.float().view(1, 1, -1).to(tdevice)
+        #print('dec: decoder input token:', dec_input_token)
+        decoded_output, hidden = self.lstm(dec_input_token, hidden) # , (h0, c0))
+        decoded_output = self.linear(decoded_output)
+        #print('decoded_output linear:', decoded_output.size())
+        decoded_output = self.softmax(decoded_output)
+        #decoded_token = torch.argmax[decoded_output].item()
+        #token = self.vocab.itos[decoded_token]
+        #print('decoded token:', decoded_token, token)
+        return decoded_output, hidden
+
 
 class Autoencoder(nn.Module):
     def __init__(self, input_size, hidden_size, elmo, batch_size=1, num_layers=1):
         super(Autoencoder, self).__init__()
-        self.encoder = EncoderRNN(input_size, hidden_size, elmo, num_layers)
-        self.decoder = DecoderRNN(hidden_size, input_size, num_layers)
+        self.input_size = input_size
+        self.hidden_size = hidden_size
         self.batch_size = batch_size
+        self.elmo = elmo
+        self.num_layers = num_layers
 
     def forward(self, input):
         encoded_input, emb = self.encoder(input, return_emb=True)
         print('encoded input:', encoded_input)
-        decoded_output = self.decoder(encoded_input)
-        return decoded_output, emb
+        #decoded_output = self.decoder(encoded_input)
+        return encoded_input, emb
 
-    def fit(self, X, epochs=1):
+    def fit(self, X, epochs=10):
         start = time.time()
         learning_rate = 0.01
-        criterion = torch.nn.MSELoss()
-        enc_optimizer = optim.Adam(self.encoder.parameters(), lr=learning_rate)
-        dec_optimizer = optim.Adam(self.decoder.parameters(), lr=learning_rate)
+        #criterion = torch.nn.MSELoss()
 
         # Linearize the event examples
         events = []
         for row in X:
             for ev in row:
-                events.append(ev)
+                # Add start and end tokens
+                ev_text = ['<sos>'] + ev[0] + ['<eos>']
+                #print('ae event text:', ev_text)
+                new_event = (ev_text, ev[1], ev[2], ev[3], ev[4])
+                events.append(new_event)
         X = events
         num_examples = len(X)
         print('Autoencoder examples:', num_examples)
+
+        # Create the vocab object
+        counter = Counter()
+        #tokenizer = WordPunctTokenizer()
+        for row in X:
+            text = row[0]
+            #print('ae row:', row, 'text:', text)
+            #for word in tokenizer.tokenize(text):
+            for word in text:
+                counter[word] += 1
+        vocab = Vocab(counter)
+        vocab_size = len(vocab.itos)
+        print('ae vocab size:', vocab_size)
+        #self.decoder.vocab = vocab
+
+        self.encoder = EncoderRNN(self.input_size, self.hidden_size, self.elmo, self.num_layers)
+        self.decoder = DecoderRNN(self.hidden_size, vocab_size, self.num_layers)
+        criterion = torch.nn.CrossEntropyLoss()
+        enc_optimizer = optim.Adam(self.encoder.parameters(), lr=learning_rate)
+        dec_optimizer = optim.Adam(self.decoder.parameters(), lr=learning_rate)
 
         for epoch in range(epochs):
             print('autoencoder epoch', str(epoch))
@@ -1974,8 +2029,8 @@ class Autoencoder(nn.Module):
             while (i+self.batch_size) < num_examples:
                 # Make sure the data is in the proper numpy array format
                 if self.batch_size == 1:
-                    batchXnp = X[i]
-                    if debug: print("batchX len:", str(len(batchXnp)))
+                    batchXnp = [X[i]]
+                    if debug: print(i, 'batchX len:', str(len(batchXnp)))
                 else:
                     batchXnp = X[i:i+self.batch_size]
                 batchX = batchXnp
@@ -1987,16 +2042,85 @@ class Autoencoder(nn.Module):
                 enc_optimizer.zero_grad()  # zero the gradient buffer
                 dec_optimizer.zero_grad()
                 loss = 0
-                outputs, enc = self(batchX)
-                outputs = outputs.view(-1, 1024)
-                #if debug: print("autoencoder outputs:", str(outputs.size()))
+                encoding, emb = self(batchX)
+                #outputs = outputs.view(-1, 1024)
+                if debug: print("autoencoder encoding:", str(encoding.size()))
+
+                # Construct target matrix
+                target_list = []
+                for row in batchX:
+                    target_row = []
+                    #print('ae target row:', row)
+                    for word in row[0]:
+                        target_word = vocab.stoi[word]
+                        target_row.append(target_word)
+                    target_list.append(target_row)
+
+                target = torch.tensor(target_list, device=tdevice).squeeze()
+                #print('target:', target.size(), target)
+                target_length = target.size()[0]
+
+                # Decoder training
+                teacher_forcing_ratio = 0.9
+                print('tdevice:', tdevice)
+                decoded_token = torch.tensor([vocab.stoi['<sos>']], dtype=torch.long, device=tdevice)
+                decoder_input = decoded_token
+                #decoder_input = torch.tensor([[SOS_token]], device=device)
+                decoder_hidden = encoding
+                use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+                outputs = []
+                loss = 0
+
+                if use_teacher_forcing:
+                    # Teacher forcing: Feed the target as the next input
+                    for di in range(target_length):
+                        #print('decoder di:', di, 'teacher forcing')
+                        decoder_output, decoder_hidden = self.decoder(decoder_input, decoder_hidden)
+                        crit_output = decoder_output.view(1, -1)
+                        #crit_target = target[di].view(1)
+
+                        topv, topi = decoder_output.topk(1)
+                        decoder_token = topi.squeeze().detach()  # detach from history as input
+
+                        # Print the predicted output for debugging
+                        token = vocab.itos[decoder_token.item()]
+                        if debug: print('decoded token:', decoder_token, token)
+                        #print('criteria: output:', crit_output.size(), 'target:', crit_target.size())
+                        #loss += criterion(decoder_output, target[di])
+                        decoder_input = target[di]  # Teacher forcing
+                        outputs.append(crit_output.squeeze())
+
+                else:
+                    # Without teacher forcing: use its own predictions as the next input
+                    for di in range(target_length):
+                        #print('decoder di:', di, 'no teacher forcing')
+                        decoder_output, decoder_hidden = self.decoder(decoder_input, decoder_hidden)
+                        topv, topi = decoder_output.topk(1)
+                        decoder_input = topi.squeeze().detach()  # detach from history as input
+
+                        # Print the predicted output for debugging
+                        token = vocab.itos[decoder_input.item()]
+                        if debug: print('decoded token:', decoder_input, token)
+                        #outputs.append(decoder_input)
+
+                        crit_output = decoder_output.view(1, -1)
+                        #crit_target = target[di].view(1)
+                        outputs.append(crit_output.squeeze())
+                        #print('criteria: output:', crit_output.size(), 'target:', crit_target.size())
+                        #loss += criterion(crit_output, crit_target)
+                        #print('decoder_input.item:', decoder_input.item())
+                        #if decoder_input.item() == vocab.stoi['<eos>']:
+                        #    print('found eos token, break')
+                        #    break
 
                 #target = torch.ones(outputs.size(0)).to(tdevice)
-                #print('target:', target.size())
+                if debug: print('target:', target.size(), target)
                 #print('enc:', enc.view(-1, 1024))
-                #print('output:', outputs)
-                loss = criterion(outputs, enc.view(-1, 1024))
-                if debug: print('MSE loss:', loss)
+                outputs = torch.stack(outputs, dim=0)
+                if debug: print('output:', outputs.size(), outputs)
+                loss = criterion(outputs, target)
+                #loss = criterion(outputs, enc.view(-1, 1024))
+                if debug: print('crossent loss:', loss)
                 loss.backward(retain_graph=True)
                 #print('encoder gradients:', self.encoder.lstm.weight_ih_l0.grad, self.encoder.lstm.weight_hh_l0.grad)
                 #print('decoder gradients:', self.decoder.lstm.weight_ih_l0.grad, self.decoder.lstm.weight_hh_l0.grad)
@@ -2007,7 +2131,7 @@ class Autoencoder(nn.Module):
                 #print('encoder gradients:', self.encoder.lstm.weight_ih_l0.grad, self.encoder.lstm.weight_hh_l0.grad)
                 #print('decoder gradients:', self.decoder.lstm.weight_ih_l0.grad, self.decoder.lstm.weight_hh_l0.grad)
                 i = i + self.batch_size
-                if torch.isnan(loss).item() == True:
+                if torch.isnan(loss).item():
                     print('ERROR: loss is nan! At epoch', epoch, 'batch', i)
                     exit(1)
 
@@ -2016,8 +2140,8 @@ class Autoencoder(nn.Module):
         print('Autoencoder training took', (time.time()-start)/60, 'mins')
 
     def encode(self, input):
-        encoded_input = self.encoder(input)
-        encoding = torch.mean(encoded_input, dim=1)
+        encoding = self.encoder(input)
+        #encoding = torch.mean(encoded_input, dim=1)
         return encoding
 
 
@@ -2046,7 +2170,7 @@ class TimeEncoder(nn.Module):
         return time_enc
 
     def forward(self, input):
-        print('input:', input)
+        #print('input:', input)
         encodings = []
         for row in input:
             time1 = self.encode(row[0])
@@ -2054,7 +2178,7 @@ class TimeEncoder(nn.Module):
             encoded_input = torch.cat((time1, time2), dim=0)
             encodings.append(encoded_input)
         encoded_batch = torch.stack(encodings, dim=0)
-        print('encoded batch:', encoded_batch.size())
+        #print('encoded batch:', encoded_batch.size())
         output = self.linear(encoded_batch)
         return output
 

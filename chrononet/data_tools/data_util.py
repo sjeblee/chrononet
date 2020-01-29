@@ -24,7 +24,7 @@ debug = True
     # TODO
 
 def add_labels(df, labels, labelname):
-    print('add_labels:', len(labels), labels)
+    print('add_labels:', len(labels))
     df[labelname] = ''
     for i, row in df.iterrows():
         #print('add_labels i=', i)

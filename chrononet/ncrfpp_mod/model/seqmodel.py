@@ -180,7 +180,7 @@ class SeqModel(nn.Module):
                 if idx == 0:
                     for row in batch_label:
                         for i in range(len(row)):
-                            print('map label:', row[i])
+                            #print('map label:', row[i])
                             row[i] = data.label_alphabet.get_index(row[i])
                             print(row[i])
                 print('epoch, batch:', idx, batch_id, 'batch_word:', batch_word, 'batch_label:', batch_label)

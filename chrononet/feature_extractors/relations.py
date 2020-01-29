@@ -31,25 +31,38 @@ def extract_relations(df, target_df):
     return target_df
 
 def extract_time_pairs(df):
+    verilogue = False
     df['feats'] = ''
     df['time_order'] = ''
     for i, row in df.iterrows():
         #if debug: print('event_vectors', str(i))
-        events = etree.fromstring(row['events'])
-        text = row['text']
-        print('narr text:', text)
-        tags = data_util.load_xml_tags(row['tags'], decode=False)
         ranks = row['event_ranks']
         time_phrases = []
         time_ranks = []
         # Create timeid map
         timex_map = {}
-        # TIMEX map
-        for timex in tags.findall('TIMEX3'):
-            tid = timex.get('id')
-            if tid is None:
-                tid = timex.get('tid')
-            timex_map[tid] = timex
+        text = row['text']
+        print('narr text:', text)
+
+        if type(row['events'])is list:
+            verilogue = True
+            events = row['events']
+            tags = row['tags']
+            # TIMEX map
+            for tag in tags:
+                if tag.tag == 'TIMEX3':
+                    tid = int(tag.features['annotation_id'])
+                    timex_map[tid] = tag
+        else:
+            events = etree.fromstring(row['events'])
+            tags = data_util.load_xml_tags(row['tags'], decode=False)
+
+            # TIMEX map
+            for timex in tags.findall('TIMEX3'):
+                tid = timex.get('id')
+                if tid is None:
+                    tid = timex.get('tid')
+                timex_map[tid] = timex
 
         for event_num in range(len(events)):
             event = events[event_num]
@@ -58,7 +71,12 @@ def extract_time_pairs(df):
             #span = event.get('span').split(',')
 
             # Get time phrase if there is one
-            time_id_string = event.get('relatedToTime')
+            if verilogue:
+                time_id_string = None
+                if 'relatedToTime' in event.features:
+                    time_id_string = event.features['relatedToTime']
+            else:
+                time_id_string = event.get('relatedToTime')
             time_words = None
             if time_id_string is not None:
                 time_id = time_id_string.split(',')[0] # Just get the first time phrase

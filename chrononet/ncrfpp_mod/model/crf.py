@@ -61,14 +61,14 @@ class CRF(nn.Module):
         # print feats.view(seq_len, tag_size)
         assert(tag_size == self.tagset_size+2)
         mask = mask.transpose(1, 0).contiguous()
-        print('crf mask:', mask.size())
+        #print('crf mask:', mask.size())
         ins_num = seq_len * batch_size
         # Be careful the view shape, it is .view(ins_num, 1, tag_size) but not .view(ins_num, tag_size, 1)
         feats = feats.transpose(1, 0).contiguous().view(ins_num, 1, tag_size).expand(ins_num, tag_size, tag_size)
         # Need to consider start
         scores = feats + self.transitions.view(1, tag_size, tag_size).expand(ins_num, tag_size, tag_size)
         scores = scores.view(seq_len, batch_size, tag_size, tag_size)
-        print('scores:', scores.size())
+        #print('scores:', scores.size())
         # build iter
         seq_iter = enumerate(scores)
         _, inivalues = next(seq_iter)  # bat_size * from_target_size * to_target_size
@@ -122,7 +122,7 @@ class CRF(nn.Module):
         # calculate sentence length for each sentence
         length_mask = torch.sum(mask.long(), dim=0).view(batch_size, 1).long()
         # mask to (seq_len, batch_size)
-        print('viterbi mask:', mask.size())
+        #print('viterbi mask:', mask.size())
         ins_num = seq_len * batch_size
         # be careful the view shape, it is .view(ins_num, 1, tag_size) but not .view(ins_num, tag_size, 1)
         feats = feats.transpose(1, 0).contiguous().view(ins_num, 1, tag_size).expand(ins_num, tag_size, tag_size)
@@ -191,7 +191,7 @@ class CRF(nn.Module):
         back_points = back_points.transpose(1,0).contiguous()
         ## decode from the end, padded position ids are 0, which will be filtered if following evaluation
         decode_idx = torch.LongTensor(seq_len, batch_size)
-        print('decode_idx:', decode_idx.size())
+        #print('decode_idx:', decode_idx.size())
         if self.gpu:
             decode_idx = decode_idx.to(tdevice)
         decode_idx[-1] = pointer.data
@@ -321,7 +321,7 @@ class CRF(nn.Module):
                 cur_values = cur_values.view(batch_size, tag_size, 1, tag_size).expand(batch_size, tag_size, nbest, tag_size) + partition.contiguous().view(batch_size, tag_size, nbest, 1).expand(batch_size, tag_size, nbest, tag_size)
                 ## compare all nbest and all from target
                 cur_values = cur_values.view(batch_size, tag_size*nbest, tag_size)
-                print("cur size:", cur_values.size())
+                #print("cur size:", cur_values.size())
             partition, cur_bp = torch.topk(cur_values, nbest, 1)
             ## cur_bp/partition: [batch_size, nbest, tag_size], id should be normize through nbest in following backtrace step
             # print partition[:,0,:]
@@ -332,7 +332,7 @@ class CRF(nn.Module):
             partition = partition.transpose(2,1)
             cur_bp = cur_bp.transpose(2,1)
 
-            print('viterbi nbest parition:', partition)
+            #print('viterbi nbest parition:', partition)
             # exit(0)
             #partition: (batch_size * to_target * nbest)
             #cur_bp: (batch_size * to_target * nbest) Notice the cur_bp number is the whole position of tag_size*nbest, need to convert when decode
@@ -385,7 +385,7 @@ class CRF(nn.Module):
         '''
 
         back_points = back_points.transpose(1, 0).contiguous()
-        print('back_points[0]:', back_points[0])
+        #print('back_points[0]:', back_points[0])
         ## back_points: (seq_len, batch, tag_size, nbest)
         ## decode from the end, padded position ids are 0, which will be filtered in following evaluation
         decode_idx = torch.LongTensor(seq_len, batch_size, nbest)

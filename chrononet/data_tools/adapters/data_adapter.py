@@ -23,13 +23,29 @@ class Element:
     element = None
     start = 0
     end = 0
+    spans = []
 
-    def __init__(self, element):
-        self.element = element
+    @classmethod
+    def from_xml(self, element):
+        elem = Element()
+        elem.element = element
         span_text = element.attrib['span']
         span = span_text.split(',')
-        self.start = int(span[0])
-        self.end = int(span[1])
+        elem.start = int(span[0])
+        elem.end = int(span[1])
+        return elem
+
+    @classmethod
+    def from_ann(self, ann, utt_num):
+        elem = Element()
+        elem.element = ann
+        # Only save spans that match this utt num
+        for sp in ann.spans:
+            if int(sp.seqNo) == utt_num:
+                elem.spans.append(sp)
+        elem.start = elem.spans[0].startIndex
+        elem.end = elem.spans[-1].endIndex
+        return elem
 
 class DataAdapter:
     debug = True
@@ -221,7 +237,7 @@ class DataAdapter:
 
             for child in ann_element:
                 if child.tag in ['EVENT', 'TIMEX3']:
-                    tags.append(Element(child))
+                    tags.append(Element.from_xml(child))
                     if self.debug:
                         print('element:', etree.tostring(child).decode('utf8'))
             if self.debug:
@@ -285,7 +301,7 @@ class DataAdapter:
 
     def get_seqs(self, text, label, seqs):
         for word in self.split_words(text):
-            seqs.append((word, OO))
+            seqs.append((word, label))
             if self.debug: print('get_seqs:', word)
 
     ''' A function for separating words and punctuation
