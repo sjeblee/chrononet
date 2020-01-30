@@ -4,6 +4,7 @@
 import numpy
 from gensim.models import KeyedVectors, Word2Vec, FastText
 from lxml import etree
+from sklearn.preprocessing import LabelEncoder
 
 # Local imports
 from data_tools import data_util
@@ -142,6 +143,11 @@ def word_vectors(df, vec_model):
 def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
     verilogue = False
 
+    # Create the time type encoder
+    time_types = ['UNK', 'DATE', 'TIME', 'DATETIME', 'DURATION', 'SET']
+    timetypeencoder = LabelEncoder()
+    timetypeencoder.fit(time_types)
+
     df['feats'] = ''
     for i, row in df.iterrows():
         if debug: print('event_vectors', str(i))
@@ -238,6 +244,12 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
                     else:
                         timex = timex_map[time_id]
                         time_text = timex.text
+                        # Get the timex type and encode it
+                        time_type = 'UNK'
+                        if 'type' in timex.attrib:
+                            time_type = timex.get('type')
+                        time_type_enc = timetypeencoder.transform([time_type])[0]
+
                         if use_iso_value:
                             tval = tutil.time_value(timex, dct_string, return_text=False)
                             print('time value of', time_text, ':', tval)
@@ -272,7 +284,7 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
             #vec = data_util.split_words(event_text)
             vec, context, c_flags = context_words(prev, event_text, next, max_len=context_size)
             #words, word_flags = context_words(prev, event_text, next)
-            event_vecs.append((context, c_flags, time_words, tflags, time_val))
+            event_vecs.append((context, c_flags, time_words, tflags, time_val, time_type_enc))
         df.at[i, 'feats'] = event_vecs
     return df
 

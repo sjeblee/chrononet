@@ -18,9 +18,9 @@ from sklearn.utils import shuffle
 
 numpy.set_printoptions(threshold=numpy.inf)
 debug = True
-#tdevice = 'cpu'
-use_cuda = torch.cuda.is_available()
-#use_cuda = False
+tdevice = 'cpu'
+#use_cuda = torch.cuda.is_available()
+use_cuda = False
 if use_cuda:
     tdevice = torch.device('cuda:3')
 options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
@@ -1442,6 +1442,7 @@ class OrderGRU(nn.Module):
                 time_words = row[2]
                 tflags = row[3]
                 time_val = row[4]
+                time_type = row[5]
                 to_concat = []
 
                 character_ids = batch_to_ids([context]).to(tdevice)

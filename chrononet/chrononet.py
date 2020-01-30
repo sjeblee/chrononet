@@ -40,7 +40,7 @@ metric_map = {'p': eval_metrics.precision, 'r': eval_metrics.recall, 'f1': eval_
 debug = True
 
 time_modelfile = None
-tdevice = 'cuda:3'
+tdevice = 'cpu'
 
 def main():
     argparser = argparse.ArgumentParser()
