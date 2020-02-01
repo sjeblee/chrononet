@@ -18,11 +18,11 @@ from sklearn.utils import shuffle
 
 numpy.set_printoptions(threshold=numpy.inf)
 debug = True
-tdevice = 'cpu'
-#use_cuda = torch.cuda.is_available()
-use_cuda = False
+#tdevice = 'cpu'
+use_cuda = torch.cuda.is_available()
+#use_cuda = False
 if use_cuda:
-    tdevice = torch.device('cuda:3')
+    tdevice = torch.device('cuda:2')
 options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
 weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
 ae_file = '/nbb/sjeblee/data/va/chrono/ordergru_va_autoencoder_timeencoder/autoencoder.model'
@@ -1390,7 +1390,7 @@ class OrderGRU(nn.Module):
         self.dropout = dropout_p
         self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
 
-        self.use_autoencoder = True
+        self.use_autoencoder = False
 
         if self.use_autoencoder:
             # TEMP so we don't have to re-train the autoencoder
@@ -1485,7 +1485,12 @@ class OrderGRU(nn.Module):
                         #time_X = time_embeddings[0]
                         #time_X = time_X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
                         print('time tensor:', time_X.size())
-                        time_emb = time_X.view(self.time_encoding_size)
+
+                        # Add time type
+                        time_type_emb = torch.tensor(time_type, dtype=torch.float, device=tdevice)
+                        #type_size = time_type_emb.size(0)
+                        time_emb = torch.cat((time_X, time_type_emb), dim=0).squeeze()
+                        print('time emb size:', time_emb.size())
 
                         # Add the flags
                         #print('tflags:', str(tflags), 'twords:', time_words)

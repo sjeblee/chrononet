@@ -144,9 +144,9 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
     verilogue = False
 
     # Create the time type encoder
-    time_types = ['UNK', 'DATE', 'TIME', 'DATETIME', 'DURATION', 'SET']
-    timetypeencoder = LabelEncoder()
-    timetypeencoder.fit(time_types)
+    #time_types = ['UNK', 'DATE', 'TIME', 'DATETIME', 'DURATION', 'SET']
+    #timetypeencoder = LabelEncoder()
+    #timetypeencoder.fit(time_types)
 
     df['feats'] = ''
     for i, row in df.iterrows():
@@ -245,10 +245,12 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
                         timex = timex_map[time_id]
                         time_text = timex.text
                         # Get the timex type and encode it
-                        time_type = 'UNK'
+                        #time_type = 'UNK'
                         if 'type' in timex.attrib:
                             time_type = timex.get('type')
-                        time_type_enc = timetypeencoder.transform([time_type])[0]
+                            time_type_enc = encode_time_type(time_type)
+                        else:
+                            time_type_enc = [0, 0, 0, 0]
 
                         if use_iso_value:
                             tval = tutil.time_value(timex, dct_string, return_text=False)
@@ -311,6 +313,21 @@ def elmo_vectors(elmo, prev, words, next, flags):
     emb_vecs = embeddings[0].view(-1, emb_size)
     # TODO: concat elmo vectors w/ flags
     return emb_vecs
+
+def encode_time_type(timetype):
+    # date, time, duration, set
+    if timetype.lower() == 'date':
+        return [1, 0, 0, 0]
+    elif timetype.lower() == 'time':
+        return [0, 1, 0, 0]
+    elif timetype.lower() == 'datetime':
+        return [1, 1, 0, 0]
+    elif timetype.lower() == 'duration':
+        return [0, 0, 1, 0]
+    elif timetype.lower() == 'set':
+        return [0, 0, 0, 1]
+    else:
+        return [0, 0, 0, 0]
 
 
 def get(word, model):
