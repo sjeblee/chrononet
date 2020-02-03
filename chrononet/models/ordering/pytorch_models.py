@@ -18,9 +18,9 @@ from sklearn.utils import shuffle
 
 numpy.set_printoptions(threshold=numpy.inf)
 debug = True
-tdevice = 'cpu'
-#use_cuda = torch.cuda.is_available()
-use_cuda = False
+#tdevice = 'cpu'
+use_cuda = torch.cuda.is_available()
+#use_cuda = False
 if use_cuda:
     tdevice = torch.device('cuda:3')
 options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
@@ -1442,7 +1442,7 @@ class OrderGRU(nn.Module):
                 time_words = row[2]
                 tflags = row[3]
                 time_val = row[4]
-                time_type = row[5]
+                #time_type = row[5]
                 to_concat = []
 
                 character_ids = batch_to_ids([context]).to(tdevice)
@@ -1900,6 +1900,7 @@ class EncoderRNN(nn.Module):
     def forward(self, input, return_emb=False):
         # Input should be (1, seq_len, dim)
         row = input[0]
+        self.hidden = None
 
         context = row[0]
         print('ae enc context:', context)
@@ -1984,7 +1985,7 @@ class Autoencoder(nn.Module):
         #decoded_output = self.decoder(encoded_input)
         return encoded_input, emb
 
-    def fit(self, X, epochs=10):
+    def fit(self, X, epochs=5):
         start = time.time()
         learning_rate = 0.01
         #criterion = torch.nn.MSELoss()
