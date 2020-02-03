@@ -1985,7 +1985,7 @@ class Autoencoder(nn.Module):
         #decoded_output = self.decoder(encoded_input)
         return encoded_input, emb
 
-    def fit(self, X, epochs=5):
+    def fit(self, X, epochs=3):
         start = time.time()
         learning_rate = 0.01
         #criterion = torch.nn.MSELoss()
