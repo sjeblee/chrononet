@@ -1570,6 +1570,7 @@ class OrderGRU(nn.Module):
     '''
     def fit(self, X, Y, activation='relu', num_epochs=10, batch_size=1, loss_function='mse', X2=None):
         start = time.time()
+        self.elmo.to(tdevice) # Make sure we're on the right gpu
 
         # Parameters
         hidden_size = self.hidden_size
