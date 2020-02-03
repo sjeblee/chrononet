@@ -1442,7 +1442,7 @@ class OrderGRU(nn.Module):
                 time_words = row[2]
                 tflags = row[3]
                 time_val = row[4]
-                #time_type = row[5]
+                time_type = row[5]
                 to_concat = []
 
                 character_ids = batch_to_ids([context]).to(tdevice)
