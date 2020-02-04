@@ -1466,7 +1466,7 @@ class OrderGRU(nn.Module):
                 # Event encoding
                 if self.use_autoencoder:
                     print('ae input tensor:', uttX)
-                    enc = self.autoencoder.encode([row]).squeeze().detach() # should be (1, encoding_dim)
+                    enc = self.autoencoder.encode([row]).squeeze()#.detach() # should be (1, encoding_dim)
                 else:
                     encoding, hn_e = self.gru0(uttX, hn_e)
                     enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
