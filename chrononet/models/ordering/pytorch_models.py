@@ -1477,7 +1477,7 @@ class OrderGRU(nn.Module):
                 # Time phrase encoding
                 if self.time_encoding_size > 0:
                     if time_words is None:
-                        time_emb = torch.zeros(self.time_encoding_size, dtype=torch.float, device=tdevice)
+                        time_emb = torch.zeros(self.time_encoding_size+4, dtype=torch.float, device=tdevice)
                     else:
                         time_X = self.time_encoder.encode(time_words)
                         #time_char_ids = batch_to_ids([time_words]).to(tdevice)
@@ -2191,6 +2191,7 @@ class TimeEncoder(nn.Module):
         return output
 
     def fit(self, X_pairs, Y, epochs=20):
+        self.elmo.to(tdevice)
         learning_rate = 0.01
         criterion = torch.nn.CrossEntropyLoss()
         optimizer = optim.SGD(self.parameters(), lr=learning_rate, momentum=0.9)
