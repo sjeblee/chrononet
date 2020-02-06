@@ -367,7 +367,7 @@ class GRU_GRU(nn.Module):
 # Set to Sequence model for temporal ordering ##############################
 
 class SetToSequence_encoder(nn.Module):
-    def __init__(self, input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, time_encoder_file=None):
+    def __init__(self, input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, time_encoder_file=None, use_autoencoder=False, ae_file=None):
         super(SetToSequence_encoder, self).__init__()
 
         options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
@@ -384,8 +384,19 @@ class SetToSequence_encoder(nn.Module):
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.dropout = dropout_p
-        self.gru0 = nn.GRU(self.input_size+1, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).double()
+
+        # Event encoder
+        self.use_autoencoder = use_autoencoder
+        if self.use_autoencoder:
+            if os.path.exists(ae_file):
+                self.autoencoder = torch.load(ae_file)
+            else:
+                self.autoencoder = Autoencoder(input_size, encoding_size, self.elmo)
+        else:
+            self.gru0 = nn.GRU(self.input_size+1, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).double()
         print('gr0 input_size:', self.gru0.input_size)
+
+        # Time encoder
         if time_encoder_file is not None:
             self.time_encoder = torch.load(time_encoder_file).model
             self.use_time_encoder = True
@@ -454,14 +465,18 @@ class SetToSequence_encoder(nn.Module):
                 X = X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
                 #print('elmo word:', X[0, 0, 0:5])
 
-                # Append the target flags
-                c_flags = torch.tensor(word_flags, dtype=torch.float64, device=tdevice).view(1, -1, 1)
-                #print('X:', X.size(), 'c_flags:', c_flags.size())
-                X = torch.cat((X, c_flags), dim=2)
-
-                #print('context tensor:', X.size())
-                encoding_c, hn_c = self.gru0(X, hn_c) # should be (1, #words, encoding_dim)
-                context_enc = encoding_c[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
+                # Event encoding
+                if self.use_autoencoder:
+                    print('ae input tensor:', X)
+                    context_enc = self.autoencoder.encode([row]).squeeze()#.detach() # should be (1, encoding_dim)
+                else:
+                    # Append the target flags
+                    c_flags = torch.tensor(word_flags, dtype=torch.float64, device=tdevice).view(1, -1, 1)
+                    #print('X:', X.size(), 'c_flags:', c_flags.size())
+                    X = torch.cat((X, c_flags), dim=2)
+                    #print('context tensor:', X.size())
+                    encoding_c, hn_c = self.gru0(X, hn_c) # should be (1, #words, encoding_dim)
+                    context_enc = encoding_c[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
                 to_concat.append(context_enc)
                 #print('context_enc:', context_enc)
 

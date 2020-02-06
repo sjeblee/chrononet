@@ -502,17 +502,16 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             else:
                 if modelname in ['neurallinear', 'neural']:
                     print('Predict and retrieve encodings...')
-                    y_pred = model.predict(test_X)
-                    '''
-                    y_pred, encodings = model.predict(test_X)
+                    #y_pred = model.predict(test_X)
+                    y_pred, encodings = model.predict(test_X, return_encodings=True)
                     print('test_ids:', len(test_ids), 'encodings:', len(encodings))
                     # Save encodings to the dataframe
-                    encodings = data_util.reorder_encodings(encodings, test_Y) # GOLD order
+                    encodings = data_util.reorder_encodings(encodings, y_pred) # PRED order
+                    #encodings = data_util.reorder_encodings(encodings, test_Y) # GOLD order
                     test_feat_df = data_util.add_labels(test_feat_df, encodings, 'feats')
-                    trainy_pred, train_encodings = model.predict(train_X)
+                    trainy_pred, train_encodings = model.predict(train_X, return_encodings=True)
                     train_encodings = data_util.reorder_encodings(train_encodings, train_Y)
                     train_feat_df = data_util.add_labels(train_feat_df, train_encodings, 'feats')
-                    '''
                 else:
                     # TEMP for THYME dataset
                     if stage_name == 'encoding':
@@ -548,7 +547,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         test_feat_df.to_csv(out_filename)
 
         # Check that the correct and predicted labels are the same length
-        check_alignment(test_ids, test_Y, y_pred)
+        #check_alignment(test_ids, test_Y, y_pred)
 
         if extra_train_df is not None:
             extra_train_df = data_util.add_labels(extra_train_df, extra_train_labels, labelname)
@@ -561,6 +560,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         else:
             y_true = test_Y
 
+        # Time embedding model synth test
         '''
         if stage_name == 'encoding':
             test_synth, labels_synth = data_util.load_time_pairs(stage_config['test_time_pairs'])

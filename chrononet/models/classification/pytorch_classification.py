@@ -16,7 +16,7 @@ debug = True
 tdevice = 'cpu'
 use_cuda = torch.cuda.is_available()
 if use_cuda:
-    tdevice = torch.device('cuda:1')
+    tdevice = torch.device('cuda:3')
 
 options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
 weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"

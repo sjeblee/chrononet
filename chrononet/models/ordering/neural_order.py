@@ -21,13 +21,16 @@ class NeuralOrderModel(ModelBase):
     output_size = 1
     #invert = False # True for VA, False for THYME
 
-    def __init__(self, input_size, encoding_size=16, context_encoding_size=16, time_encoding_size=8, hidden_size=40, dropout=0.1, read_cycles=48, group_thresh=0.01, sigma=1, epochs=15, invert=False, encoder_file=None):
+    def __init__(self, input_size, encoding_size=16, time_encoding_size=8, hidden_size=40, dropout=0.1, read_cycles=48,
+                 group_thresh=0.01, sigma=1, epochs=15, invert=False, encoder_file=None, use_autoencoder=False, ae_file=None):
         self.input_size = int(input_size)+0 # Add 2 for the target phrase flag and polarity flag
         self.group_thresh = float(group_thresh)
         self.epochs = int(epochs)
         #self.model = GRU_GRU(self.input_size, self.encoding_size, self.hidden_size, self.output_size, dropout_p=self.dropout)
-        self.model = SetToSequenceGroup(self.input_size, int(encoding_size), int(context_encoding_size), int(time_encoding_size), int(hidden_size), self.output_size,
-                                        dropout_p=float(dropout), read_cycles=int(read_cycles), group_thresh=self.group_thresh, invert_ranks=bool(invert), sig=float(sigma), time_encoder_file=encoder_file)
+        self.model = SetToSequenceGroup(self.input_size, int(encoding_size), int(encoding_size), int(time_encoding_size), int(hidden_size), self.output_size,
+                                        dropout_p=float(dropout), read_cycles=int(read_cycles), group_thresh=self.group_thresh,
+                                        invert_ranks=bool(invert), sig=float(sigma), time_encoder_file=encoder_file, use_autoencoder=use_autoencoder,
+                                        ae_file=ae_file)
 
     def fit(self, X, Y):
         self.model.fit(X, Y, num_epochs=self.epochs)
@@ -52,18 +55,19 @@ class NeuralLinearModel(ModelBase):
     output_size = 1
     invert = False # True for VA, False for THYME
 
-    def __init__(self, input_size, encoder_file, encoding_size=32, time_encoding_size=2, hidden_size=32, dropout=0.2, read_cycles=48, epochs=10):
+    def __init__(self, input_size, encoder_file, encoding_size=32, time_encoding_size=2, hidden_size=32, dropout=0.2, read_cycles=48, epochs=10, use_autoencoder=False, ae_file=None):
         self.input_size = int(input_size) # Add 2 for the target phrase flag and polarity flag
         self.epochs = int(epochs)
-        self.model = OrderGRU(self.input_size, int(encoding_size), int(time_encoding_size), int(hidden_size), self.output_size, encoder_file, dropout_p=float(dropout))
+        self.model = OrderGRU(self.input_size, int(encoding_size), int(time_encoding_size), int(hidden_size), self.output_size, encoder_file,
+                              dropout_p=float(dropout)) #, use_autoencoder=use_autoencoder, ae_file=ae_file)
         #self.model = SetToSequence(self.input_size, self.encoding_size, self.time_encoding_size, self.hidden_size, self.output_size,
         #                           dropout_p=self.dropout, read_cycles=self.read_cycles, group_thresh=self.group_thresh, invert_ranks=self.invert)
 
     def fit(self, X, Y):
         self.model.fit(X, Y, num_epochs=self.epochs)
 
-    def predict(self, X):
-        return self.model.predict(X)
+    def predict(self, X, return_encodings=False):
+        return self.model.predict(X, return_encodings=return_encodings)
 
 # HYPEROPT
 
