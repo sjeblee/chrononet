@@ -229,6 +229,7 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
             # TODO
 
             # Get time phrase if there is one
+            time_type_enc = [0, 0, 0, 0]
             if verilogue:
                 #time_id_string = event.features['relatedToTime']
                 time_id_string = None # TEMP
@@ -237,7 +238,6 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
                 time_words = None
                 time_val = None
                 tflags = []
-                time_type_enc = [0, 0, 0, 0]
                 if time_id_string is not None:
                     time_id = time_id_string.split(',')[0] # Just get the first time phrase
                     if time_id not in timex_map:
