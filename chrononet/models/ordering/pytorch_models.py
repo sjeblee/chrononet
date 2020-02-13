@@ -367,7 +367,7 @@ class GRU_GRU(nn.Module):
 # Set to Sequence model for temporal ordering ##############################
 
 class SetToSequence_encoder(nn.Module):
-    def __init__(self, input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, time_encoder_file=None, use_autoencoder=False, ae_file=None):
+    def __init__(self, input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, time_encoder_file=None, use_autoencoder=False, autoencoder_file=None):
         super(SetToSequence_encoder, self).__init__()
 
         options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
@@ -386,15 +386,17 @@ class SetToSequence_encoder(nn.Module):
         self.dropout = dropout_p
 
         # Event encoder
-        self.use_autoencoder = use_autoencoder
+        self.use_autoencoder = True
+        print('use_autoencoder:', use_autoencoder, 'ae_file:', autoencoder_file)
         if self.use_autoencoder:
-            if os.path.exists(ae_file):
-                self.autoencoder = torch.load(ae_file)
+            if autoencoder_file is not None and os.path.exists(autoencoder_file):
+                print('loading previously trained autoencoder')
+                self.autoencoder = torch.load(autoencoder_file)
             else:
-                self.autoencoder = Autoencoder(input_size, encoding_size, self.elmo)
+                self.autoencoder = Autoencoder(input_size, encoding_size, self.elmo, use_double=True, autoencoder_file=autoencoder_file)
         else:
             self.gru0 = nn.GRU(self.input_size+1, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).double()
-        print('gr0 input_size:', self.gru0.input_size)
+            print('gr0 input_size:', self.gru0.input_size)
 
         # Time encoder
         if time_encoder_file is not None:
@@ -478,7 +480,7 @@ class SetToSequence_encoder(nn.Module):
                     encoding_c, hn_c = self.gru0(X, hn_c) # should be (1, #words, encoding_dim)
                     context_enc = encoding_c[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
                 to_concat.append(context_enc)
-                #print('context_enc:', context_enc)
+                print('context_enc:', context_enc)
 
             # Time phrase encoding
             if self.time_encoding_size > 0:
@@ -514,7 +516,7 @@ class SetToSequence_encoder(nn.Module):
                 time_enc = torch.cat((time_emb, time_enc), dim=0)
                 '''
                 to_concat.append(time_emb)
-                #print('time_enc:', time_emb)
+                print('time_enc:', time_emb)
 
             # Structured features
             #flag_tensor = torch.tensor(flags, dtype=torch.float64, device=tdevice)
@@ -1014,8 +1016,8 @@ class SetToSequenceGroup_transition(nn.Module):
 
 class SetToSequenceGroup:
 
-    def __init__(self, input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, group_thresh=None, invert_ranks=False, sig=1, time_encoder_file=None):
-        self.encoder = SetToSequence_encoder(input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p, read_cycles, time_encoder_file)
+    def __init__(self, input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, group_thresh=None, invert_ranks=False, sig=1, time_encoder_file=None, use_autoencoder=False, autoencoder_file=None):
+        self.encoder = SetToSequence_encoder(input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p, read_cycles, time_encoder_file, use_autoencoder=use_autoencoder, autoencoder_file=autoencoder_file)
         self.decoder = SetToSequenceGroup_decoder(hidden_size, output_size, dropout_p, group_thresh)
         self.group_thresh = group_thresh
         self.hidden_size = hidden_size
@@ -1073,6 +1075,10 @@ class SetToSequenceGroup:
 
         print("input_dim: ", str(input_dim))
         print("output_dim: ", str(output_dim))
+
+        # Train the autoencoder
+        if self.encoder.use_autoencoder:
+            self.encoder.autoencoder.fit(X)
 
         # Train the model
         for epoch in range(num_epochs):
@@ -1896,7 +1902,7 @@ def smooth_distribution(target, sig):
 
 # Autoencoder modules
 class EncoderRNN(nn.Module):
-    def __init__(self, input_size, hidden, elmo, num_layers=1):
+    def __init__(self, input_size, hidden, elmo, num_layers=1, use_double=False):
         super(EncoderRNN, self).__init__()
         self.input_size = input_size
         self.hidden_size = int(hidden/2)
@@ -1907,6 +1913,11 @@ class EncoderRNN(nn.Module):
         self.relu = nn.ReLU().to(tdevice)
         self.hidden = torch.randn((2, 1, self.hidden_size)).to(tdevice)
         print('encoder hidden:', self.hidden)
+        self.use_double = use_double
+
+        if self.use_double:
+            self.lstm = self.lstm.double()
+            self.hidden = self.hidden.double()
 
         #initialize weights
         #nn.init.xavier_uniform(self.lstm.weight_ih_l0, gain=numpy.sqrt(2))
@@ -1927,11 +1938,14 @@ class EncoderRNN(nn.Module):
         character_ids = batch_to_ids([context]).to(tdevice)
         #print('char ids:', character_ids)
         embeddings = self.elmo(character_ids)['elmo_representations']
-        #print('elmo embeddings:', len(embeddings), embeddings)
-        X = embeddings[0].squeeze()
+        print('elmo embeddings:', len(embeddings), embeddings)
+        X = embeddings[0].squeeze().detach() # NOTE: detaching to prevent nans in the Elmo layer
+        if self.use_double:
+            X = X.double()
+            print('X.double:', X)
         #print('input_size:', self.input_size, 'X:', X.size())
         uttX = X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
-        #print('autoencoder emb:', uttX)
+        print('autoencoder emb:', uttX)
 
         # Append the target flags
         #c_flags = torch.tensor(word_flags, dtype=torch.float, device=tdevice).view(1, -1, 1)
@@ -1940,8 +1954,10 @@ class EncoderRNN(nn.Module):
 
         #h0 = torch.FloatTensor(self.num_layers*2, 1, self.hidden_size).to(tdevice)
         #c0 = torch.FloatTensor(self.num_layers*2, 1, self.hidden_size).to(tdevice)
+        print('lstm input', type(uttX), 'hidden:', type(self.hidden), 'double:', self.use_double)
         encoded_input, self.hidden = self.lstm(uttX, self.hidden) # , (h0, c0))
         encoded_input = encoded_input[:, -1, :].view(1, 1, -1) # Keep just the last timestep
+        print('encoded_input before relu:', encoded_input)
         encoded_input = self.relu(encoded_input)
         if return_emb:
             return encoded_input, uttX
@@ -1949,12 +1965,13 @@ class EncoderRNN(nn.Module):
             return encoded_input
 
 class DecoderRNN(nn.Module):
-    def __init__(self, hidden, output_size, num_layers=1):
+    def __init__(self, hidden, output_size, num_layers=1, use_double=False):
         super(DecoderRNN, self).__init__()
         self.hidden_size = hidden
         self.output_size = int(output_size/2)
         self.num_layers = num_layers
         self.vocab = None
+        self.use_double = use_double
 
         #self.isCuda = isCuda
         self.lstm = nn.GRU(input_size=1, hidden_size=self.hidden_size, batch_first=True, bidirectional=False).to(tdevice)
@@ -1962,6 +1979,10 @@ class DecoderRNN(nn.Module):
         self.linear = nn.Linear(self.hidden_size, output_size).to(tdevice)
         self.softmax = nn.LogSoftmax(dim=2).to(tdevice)
         #self.sigmoid = nn.Tanh().to(tdevice)
+
+        if use_double:
+            self.lstm = self.lstm.double()
+            self.linear = self.linear.double()
 
         #initialize weights
         #nn.init.xavier_uniform(self.lstm.weight_ih_l0, gain=numpy.sqrt(2))
@@ -1973,8 +1994,11 @@ class DecoderRNN(nn.Module):
         #c0 = torch.FloatTensor(self.num_layers*2, encoded_input.size(0), self.output_size).to(tdevice)
         #print('h0:', h0)
         #print('c0:', c0)
-        dec_input_token = input_token.float().view(1, 1, -1).to(tdevice)
-        #print('dec: decoder input token:', dec_input_token)
+        if self.use_double:
+            dec_input_token = input_token.double().view(1, 1, -1).to(tdevice)
+        else:
+            dec_input_token = input_token.float().view(1, 1, -1).to(tdevice)
+        print('dec: decoder input token:', dec_input_token)
         decoded_output, hidden = self.lstm(dec_input_token, hidden) # , (h0, c0))
         decoded_output = self.linear(decoded_output)
         #print('decoded_output linear:', decoded_output.size())
@@ -1986,13 +2010,18 @@ class DecoderRNN(nn.Module):
 
 
 class Autoencoder(nn.Module):
-    def __init__(self, input_size, hidden_size, elmo, batch_size=1, num_layers=1):
+    def __init__(self, input_size, hidden_size, elmo, batch_size=1, num_layers=1, use_double=False, autoencoder_file=None):
         super(Autoencoder, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.batch_size = batch_size
         self.elmo = elmo
         self.num_layers = num_layers
+        self.use_double = use_double
+        if autoencoder_file is None:
+            self.file = ae_file
+        else:
+            self.file = autoencoder_file
 
     def forward(self, input):
         encoded_input, emb = self.encoder(input, return_emb=True)
@@ -2000,7 +2029,7 @@ class Autoencoder(nn.Module):
         #decoded_output = self.decoder(encoded_input)
         return encoded_input, emb
 
-    def fit(self, X, epochs=3):
+    def fit(self, X, epochs=10):
         start = time.time()
         learning_rate = 0.01
         #criterion = torch.nn.MSELoss()
@@ -2032,8 +2061,8 @@ class Autoencoder(nn.Module):
         print('ae vocab size:', vocab_size)
         #self.decoder.vocab = vocab
 
-        self.encoder = EncoderRNN(self.input_size, self.hidden_size, self.elmo, self.num_layers)
-        self.decoder = DecoderRNN(self.hidden_size, vocab_size, self.num_layers)
+        self.encoder = EncoderRNN(self.input_size, self.hidden_size, self.elmo, self.num_layers, self.use_double)
+        self.decoder = DecoderRNN(self.hidden_size, vocab_size, self.num_layers, self.double)
         criterion = torch.nn.CrossEntropyLoss()
         enc_optimizer = optim.Adam(self.encoder.parameters(), lr=learning_rate)
         dec_optimizer = optim.Adam(self.decoder.parameters(), lr=learning_rate)
@@ -2079,7 +2108,7 @@ class Autoencoder(nn.Module):
 
                 # Decoder training
                 teacher_forcing_ratio = 0.9
-                print('tdevice:', tdevice)
+                #print('tdevice:', tdevice)
                 decoded_token = torch.tensor([vocab.stoi['<sos>']], dtype=torch.long, device=tdevice)
                 decoder_input = decoded_token
                 #decoder_input = torch.tensor([[SOS_token]], device=device)
@@ -2152,8 +2181,8 @@ class Autoencoder(nn.Module):
                     print('ERROR: loss is nan! At epoch', epoch, 'batch', i)
                     exit(1)
 
-        print('Saving autoencoder...')
-        torch.save(self, ae_file)
+        print('Saving autoencoder to:', self.file)
+        torch.save(self, self.file)
         print('Autoencoder training took', (time.time()-start)/60, 'mins')
 
     def encode(self, input):

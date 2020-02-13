@@ -248,7 +248,7 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
                         time_type = 'UNK'
                         if 'type' in timex.attrib:
                             time_type = timex.get('type')
-                        time_type_enc = timetypeencoder.transform([time_type])[0]
+                        #time_type_enc = timetypeencoder.transform([time_type])[0]
 
                         if use_iso_value:
                             tval = tutil.time_value(timex, dct_string, return_text=False)
@@ -284,6 +284,7 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
             #vec = data_util.split_words(event_text)
             vec, context, c_flags = context_words(prev, event_text, next, max_len=context_size)
             #words, word_flags = context_words(prev, event_text, next)
+            time_type_enc = [0, 0, 0, 0, 0]
             event_vecs.append((context, c_flags, time_words, tflags, time_val, time_type_enc))
         df.at[i, 'feats'] = event_vecs
     return df

@@ -546,18 +546,33 @@ class OrderRNN(nn.Module):
         self.hidden_size = hidden_size
         print('Joint order/classify model: input:', input_size, 'hidden:', hidden_size, 'output:', C, 'batch_size:', self.batch_size)
 
-        #self.gru = nn.GRU(input_size=self.hidden_size, hidden_size=int(self.hidden_size/2), batch_first=True, bidirectional=True, dropout=dropout_p)
+        self.gru = nn.GRU(input_size=self.hidden_size+1, hidden_size=int(self.hidden_size/2), batch_first=True, bidirectional=True, dropout=dropout_p)
         self.fc1 = nn.Linear(self.hidden_size*2, C)
         self.logsoftmax = nn.LogSoftmax(dim=1)
 
     def forward(self, x):
-        hn = None
+        #hn = None
         batch_size = len(x)
-        #print('x:', x)
+        print('batch_size:', batch_size, 'x:', x)
+        #x_tensor = x[0]
+        #print('x tensor size:', x.size())
         ranks, X = self.order_model.forward(x[0])
+        #num_ranks = ranks.size(1)
+        #print('ranks:', num_ranks, ranks)
+        #ranks = torch.tensor(ranks, dtype=torch.float, device=tdevice).view(1, num_ranks)
+        print('timeline:', X.size(), 'ranks:', ranks.size())
 
+        # TODO: re-order the timeline according to rank
+        input = torch.cat((X, ranks), dim=2)
+        print('rnn input:', input.size())
+        output_full, hn = self.gru(input)
+        print('rnn output:', output_full.size())
+        output = output_full[:, -1, :].view(-1, self.hidden_size)
+
+        # What was I doing here???
         #output, hn = self.gru(X, hn)
-        output = X[:, -1, :].view(-1, self.hidden_size*2) # Save only the last timestep
+        #output = X[:, -1, :].view(-1, self.hidden_size) # Save only the last timestep
+
         print('output:', output.size())
         out = self.fc1(output)
         return out, ranks
@@ -584,7 +599,7 @@ class OrderRNN(nn.Module):
         X_len = len(X)
         print('X len:', X_len)
         print('Y numpy shape:', str(Yarray.shape))
-        print('Y2', len(Y2))
+        #print('Y2', len(Y2))
         print('batch_size:', self.batch_size)
         steps = 0
         st = time.time()
