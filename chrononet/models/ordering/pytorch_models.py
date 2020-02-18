@@ -1418,7 +1418,7 @@ class OrderGRU(nn.Module):
             if os.path.exists(ae_file):
                 self.autoencoder = torch.load(ae_file)
             else:
-                self.autoencoder = Autoencoder(input_size, encoding_size, self.elmo)
+                self.autoencoder = Autoencoder(input_size, encoding_size, self.elmo, use_double=False)
         else:
             self.gru0 = nn.GRU(input_size+1, int(encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
         self.gru1 = nn.GRU(hidden_size, int(hidden_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
@@ -1971,7 +1971,7 @@ class DecoderRNN(nn.Module):
         self.output_size = int(output_size/2)
         self.num_layers = num_layers
         self.vocab = None
-        self.use_double = use_double
+        self.use_double = bool(use_double)
 
         #self.isCuda = isCuda
         self.lstm = nn.GRU(input_size=1, hidden_size=self.hidden_size, batch_first=True, bidirectional=False).to(tdevice)
