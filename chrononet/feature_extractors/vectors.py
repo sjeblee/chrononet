@@ -5,12 +5,15 @@ import numpy
 from gensim.models import KeyedVectors, Word2Vec, FastText
 from lxml import etree
 from sklearn.preprocessing import LabelEncoder
+from transformers import BertTokenizer
 
 # Local imports
 from data_tools import data_util
 from data_tools import temporal_util as tutil
 
 debug = True
+bert_file = "monologg/biobert_v1.1_pubmed"
+bert_tokenizer = BertTokenizer.from_pretrained(bert_file)
 
 
 ''' Return a single vector per events (flattened context)
@@ -83,12 +86,17 @@ def context_vector(vec_model, prev, target, next, max_len=10, lowercase=True, fl
     return vecs
 
 
-def context_words(prev, target, next, max_len=10, lowercase=True):
+def context_words(prev, target, next, max_len=10, lowercase=True, use_bert=False):
     words = []
     c_words = []
-    target_words = data_util.split_words(target)
-    prev_words = data_util.split_words(prev)
-    next_words = data_util.split_words(next)
+    if use_bert:
+        target_words = bert_tokenizer.tokenize(target)
+        prev_words = bert_tokenizer.tokenize(prev)
+        next_words = bert_tokenizer.tokenize(next)
+    else:
+        target_words = data_util.split_words(target)
+        prev_words = data_util.split_words(prev)
+        next_words = data_util.split_words(next)
     prev_size = 0
     next_size = 0
     word_flags = []
@@ -122,6 +130,7 @@ def context_words(prev, target, next, max_len=10, lowercase=True):
                 word = word.lower()
             c_words.append(word)
             word_flags.append(0)
+    print('words, flags:', len(c_words), len(word_flags))
     return words, c_words, word_flags
     #return words, c_words
 
@@ -138,9 +147,14 @@ def word_vectors(df, vec_model):
     print("TODO")
 
 
+def bert_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
+    print('bert_event_vectors')
+    return elmo_event_vectors(df, flatten, use_iso_value, context_size, use_bert=True)
+
+
 ''' Convert the dataframe feature column to a numpy array for processing
 '''
-def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
+def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5, use_bert=False):
     verilogue = False
 
     # Create the time type encoder
@@ -155,7 +169,7 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
         timex_map = {}
         signal_map = {}
         utt_map = None
-        text = row['text']
+        text = row['text'].strip() # NOTE: we need to strip the extra whitespace to get the right event spans
 
         # Verilogue data processing
         if type(text) is list:
@@ -215,6 +229,9 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
                 event_text = text[int(span[0]): int(span[1])]
                 #event_text = event.text
                 print('event text:', event.text, 'span text:', event_text, span[0], span[1])
+                #print('text:', text)
+                print('prev:', prev)
+                print('next:', next)
                 pol = event.get('polarity')
                 pol_flag = 0
                 if pol is not None and pol.lower() == 'neg':
@@ -265,7 +282,10 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
                                 time = int(time_string.replace(':', ''))
                             time_val = [date, time]
                         #else:
-                        time_words = data_util.split_words(time_text)
+                        if use_bert:
+                            time_words = bert_tokenizer.tokenize(time_text)
+                        else:
+                            time_words = data_util.split_words(time_text)
                         for tw in time_words:
                             tflags.append(1)
 
@@ -274,7 +294,10 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
                         if signal_id is not None:
                             signal = signal_map[signal_id.lower()]
                             signal_text = signal.text
-                            signal_words = data_util.split_words(signal_text)
+                            if use_bert:
+                                signal_words = bert_tokenizer.tokenize(signal_text)
+                            else:
+                                signal_words = data_util.split_words(signal_text)
                             sflags = []
                             for sw in signal_words:
                                 sflags.append(0)
@@ -282,7 +305,7 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
                             tflags = sflags + tflags # Append time word flags
 
             #vec = data_util.split_words(event_text)
-            vec, context, c_flags = context_words(prev, event_text, next, max_len=context_size)
+            vec, context, c_flags = context_words(prev, event_text, next, max_len=context_size, use_bert=use_bert)
             #words, word_flags = context_words(prev, event_text, next)
             time_type_enc = [0, 0, 0, 0, 0]
             event_vecs.append((context, c_flags, time_words, tflags, time_val, time_type_enc))

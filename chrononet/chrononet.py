@@ -21,17 +21,18 @@ from feature_extractors import numpyer, relations, syntactic, vectors
 from models.sequence.crf import CRFfactory
 from models.sequence.ncrfpp import NCRFppFactory
 from models.encoding.time_encoding import TimeEncodingFactory
-from models.ordering.neural_order import NeuralOrderFactory, HyperoptNeuralOrderFactory, NeuralLinearFactory
+from models.ordering.neural_order import NeuralOrderFactory, HyperoptNeuralOrderFactory, NeuralLinearFactory, SetOrderFactory
 from models.ordering.random_order import RandomOrderFactory, MentionOrderFactory
 from models.classification.cnn import CNNFactory, MatrixCNNFactory, RNNFactory, MatrixRNNFactory
 from models.classification.random import RandomFactory
 
 # SETUP
 fe_map = {'relations': relations.extract_relations, 'syntactic': syntactic.sent_features,
-          'event_vectors': vectors.event_vectors, 'elmo_vectors': vectors.elmo_event_vectors, 'elmo_words': vectors.elmo_word_vectors,
+          'event_vectors': vectors.event_vectors, 'bert_vectors': vectors.bert_event_vectors, 'elmo_vectors': vectors.elmo_event_vectors, 'elmo_words': vectors.elmo_word_vectors,
           'none': numpyer.dummy_function, 'timeline': numpyer.do_nothing, 'time_pairs': relations.extract_time_pairs}
 vector_feats = ['event_vectors']
-model_map = {'crf': CRFfactory, 'random': RandomOrderFactory, 'mention': MentionOrderFactory, 'neural': NeuralOrderFactory, 'neurallinear': NeuralLinearFactory, 'hyperopt': HyperoptNeuralOrderFactory,
+model_map = {'crf': CRFfactory, 'random': RandomOrderFactory, 'mention': MentionOrderFactory, 'neural': NeuralOrderFactory, 'neurallinear': NeuralLinearFactory,
+             'setorder': SetOrderFactory, 'hyperopt': HyperoptNeuralOrderFactory,
              'cnn': CNNFactory, 'rnn': RNNFactory, 'matrixcnn': MatrixCNNFactory, 'matrixrnn': MatrixRNNFactory, 'ncrfpp': NCRFppFactory,
              'randclass': RandomFactory, 'time_encoding': TimeEncodingFactory}
 metric_map = {'p': eval_metrics.precision, 'r': eval_metrics.recall, 'f1': eval_metrics.f1, 'mae': ordering_metrics.rank_mae,
@@ -40,7 +41,7 @@ metric_map = {'p': eval_metrics.precision, 'r': eval_metrics.recall, 'f1': eval_
 debug = True
 
 time_modelfile = None
-tdevice = 'cuda:3'
+tdevice = 'cuda'
 
 def main():
     argparser = argparse.ArgumentParser()
@@ -345,7 +346,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         elif stage_name == 'ordering':
             should_encode = False
             use_numpy = False
-            if modelname == 'neurallinear':
+            if modelname in ['neurallinear', 'setorder']:
                 should_encode = True
         elif stage_name == 'sequence' and not modelname == 'ncrfpp':
             should_encode = True # Should we encode labels
@@ -403,11 +404,9 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                 print('Wrote train time pairs to file')
             '''
             # Load extra time pairs for training
-            '''
             train_extra, labels_extra = data_util.load_time_pairs(stage_config['train_time_pairs'])
             train_X = train_extra #+ train_X
             train_Y = labelencoder.transform(labels_extra).tolist() #+ train_Y
-            '''
 
         # Get rank labels for joint ordering/classification model
         if order_classify:
@@ -452,7 +451,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             time_modelfile = modelfile
             print('saved time_modelfile')
 
-        if modelname in ['neural', 'neurallinear', 'rnn']:
+        if modelname in ['neural', 'neurallinear', 'rnn', 'setorder']:
             stage_params['encoder_file'] = time_modelfile
 
         if modelname == 'ground_truth':
@@ -483,7 +482,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                 else:
                     model.fit(train_X, train_Y)
                 # Save the model
-                if modelname in ['neural', 'neurallinear', 'cnn', 'ncrfpp', 'rnn', 'matrixcnn', 'matrixrnn', 'time_encoding']:
+                if modelname in ['neural', 'neurallinear', 'cnn', 'ncrfpp', 'rnn', 'matrixcnn', 'matrixrnn', 'time_encoding', 'setorder']:
                     print('Saving model...')
                     save(model, modelfile, 'torch')
 
@@ -500,11 +499,12 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             if modelname == 'hyperopt':
                 y_pred = model.predict(test_X, test_Y)
             else:
-                if modelname in ['neurallinear', 'neural']:
+                if modelname in ['neurallinear', 'neural', 'setorder']:
                     print('Predict and retrieve encodings...')
                     #y_pred = model.predict(test_X)
                     y_pred, encodings = model.predict(test_X, return_encodings=True)
                     print('test_ids:', len(test_ids), 'encodings:', len(encodings))
+
                     # Save encodings to the dataframe
                     encodings = data_util.reorder_encodings(encodings, y_pred) # PRED order
                     #encodings = data_util.reorder_encodings(encodings, test_Y) # GOLD order
@@ -523,7 +523,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         print('time for model', modelname, ':', time_string(time.time()-m_time))
 
         # Save results to dataframe
-        if should_encode and not modelname == 'neurallinear':
+        if should_encode and modelname not in ['neurallinear', 'setorder']:
             print('decoding labels...', labelencoder.classes_)
             if stage_name == 'sequence' or stage_name == 'encoding':
                 pred_labels = []

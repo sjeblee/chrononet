@@ -136,7 +136,8 @@ def rank_mse(true_ranks, pred_ranks):
 ''' Calculate the pairwise accuracy of a listwise ranking
     Currently this is a macro average (every document has equal weight)
 '''
-def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.00001, avg=True):
+def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.01, avg=True):
+    print('poa calculation: eps:', eps)
     accuracies = []
     for n in range(len(true_ranks)):
         pr = pred_ranks[n]
@@ -201,6 +202,7 @@ def events_per_rank(labels, thresh=0.0):
         for key in rank_to_num.keys():
             epr.append(rank_to_num[key])
 
+    print('epr:', epr)
     avg_epr = numpy.average(numpy.asarray(epr))
     return avg_epr
 
