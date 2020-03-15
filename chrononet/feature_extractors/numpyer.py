@@ -17,20 +17,39 @@ debug = True
     use_numpy: True if we should convert to a numpy array
     doc_level: True if features should aggregate features at the document level (NOT IMPLEMENTED)
 '''
-def to_feats(df, use_numpy=True, doc_level=False):
-    print('to_feats: use_numpy:', use_numpy, 'doc_level:', doc_level)
+def to_feats(df, use_numpy=True, doc_level=False, feat_names=None):
+    print('to_feats: use_numpy:', use_numpy, 'doc_level:', doc_level, 'feats:', feat_names)
     feats = []
-    for i, row in df.iterrows():
-        flist = row['feats']
-        if type(flist) is str:
-            flist = ast.literal_eval(flist)
+    feat_columns = []
 
-        feats.append(flist)
-        #if debug:
-        #print('to_feats: ', row['docid'], 'feats:', len(flist))
-        if debug and i == 0:
-            if len(flist) > 0:
-                print('feats[0]:', type(flist[0]), flist[0])
+    # Get the names of the feature columns for the df
+    if feat_names is None:
+        feat_columns.append('feats')
+    else: # Handle multiple feature types
+        for fname in feat_names:
+            feat_columns.append('feats_' + fname)
+
+    # Load a list of all the features
+    for i, row in df.iterrows():
+        if len(feat_columns) > 1:
+            mini_feat_list = []
+        for featname in feat_columns:
+            flist = row[featname]
+            if type(flist) is str:
+                flist = ast.literal_eval(flist)
+
+            if len(feat_columns) > 1:
+                mini_feat_list.append(flist)
+            else:
+                feats.append(flist)
+            #if debug:
+            #print('to_feats: ', row['docid'], 'feats:', len(flist))
+            if debug and i == 0:
+                if len(flist) > 0:
+                    print('feats[0]:', type(flist[0]), flist[0])
+        if len(feat_columns) > 1:
+            feats.append(mini_feat_list)
+
     if use_numpy:
         return numpy.asarray(feats).astype('float')
     else:

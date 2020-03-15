@@ -38,11 +38,12 @@ class MatrixCNNFactory(ModelFactory):
 class MatrixCNNModel(ModelBase):
     model = None
 
-    def __init__(self, input_size, num_classes, epochs=10, dropout=0.1, kernels=50, ksizes=5, pad_size=10):
+    def __init__(self, input_size, num_classes, epochs=10, dropout=0.1, kernels=50, ksizes=5, pad_size=10, use_double=False):
         self.input_size = int(input_size)
         self.epochs = int(epochs)
+        doub = bool(str(use_double) == 'True')
         self.model = MatrixCNN(self.input_size, int(num_classes), num_epochs=self.epochs, dropout_p=float(dropout), kernel_num=int(kernels),
-                               kernel_sizes=int(ksizes), pad_size=int(pad_size))
+                               kernel_sizes=int(ksizes), pad_size=int(pad_size), use_double=doub)
 
     def fit(self, X, Y):
         self.model.fit(X, Y)
