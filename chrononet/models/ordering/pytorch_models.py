@@ -1976,7 +1976,7 @@ class EncoderRNN(nn.Module):
         #nn.init.xavier_uniform(self.lstm.weight_ih_l0, gain=numpy.sqrt(2))
         #nn.init.xavier_uniform(self.lstm.weight_hh_l0, gain=numpy.sqrt(2))
 
-    def forward(self, input, return_emb=False):
+    def forward(self, input, noise_factor=0.0, return_emb=False):
         # Input should be (1, seq_len, dim)
         row = input[0]
         self.hidden = None
@@ -1990,9 +1990,10 @@ class EncoderRNN(nn.Module):
 
         ev_text = ['<sos>'] + context + ['<eos>']
         flags = [0] + word_flags + [0]
-        ae_row = (ev_text, flags)
+        #ae_row = (ev_text, flags)
+        ae_row = row
 
-        enc, emb = self.embedder(ae_row, return_emb=True)
+        enc, emb = self.embedder(ae_row, return_emb=True, noise_factor=noise_factor)
         if self.use_double:
             enc = enc.double()
 
@@ -2064,7 +2065,8 @@ class Autoencoder(nn.Module):
         self.num_layers = num_layers
         self.use_double = use_double
         self.encoder_name = encoder_name
-        self.gamma = 0.3
+        self.gamma = 0.5
+        self.noise_factor = 0.15
         print('autoencoder use_double:', self.use_double, 'encoder_name:', encoder_name)
         #if autoencoder_file is None:
         #    self.file = autoencoder_file
@@ -2073,13 +2075,13 @@ class Autoencoder(nn.Module):
         self.file = autoencoder_file
         assert(self.file is not None)
 
-    def forward(self, input):
-        encoded_input, emb = self.encoder(input, return_emb=True)
+    def forward(self, input, noise_factor=0.0):
+        encoded_input, emb = self.encoder(input, return_emb=True, noise_factor=noise_factor)
         print('ae encoded input:', encoded_input)
         #decoded_output = self.decoder(encoded_input)
         return encoded_input, emb
 
-    def fit(self, X, epochs=30):
+    def fit(self, X, epochs=50):
         start = time.time()
         learning_rate = 0.001
         #criterion = torch.nn.MSELoss()
@@ -2141,7 +2143,7 @@ class Autoencoder(nn.Module):
                 enc_optimizer.zero_grad()  # zero the gradient buffer
                 dec_optimizer.zero_grad()
                 loss = 0
-                encoding, emb = self(batchX)
+                encoding, emb = self(batchX, self.noise_factor)
                 #outputs = outputs.view(-1, 1024)
                 if debug: print("autoencoder encoding:", str(encoding.size()))
 
@@ -2150,16 +2152,17 @@ class Autoencoder(nn.Module):
                 for row in batchX:
                     target_row = []
                     #print('ae target row:', row)
-                    target_row.append(vocab.stoi['<sos>'])
+                    #target_row.append(vocab.stoi['<sos>'])
                     for word in row[0]:
                         target_word = vocab.stoi[word]
                         target_row.append(target_word)
                     target_row.append(vocab.stoi['<eos>'])
                     target_list.append(target_row)
 
-                target = torch.tensor(target_list, device=tdevice).squeeze()
-                #print('target:', target.size(), target)
-                target_length = target.size()[0]
+                target_length = len(target_row)
+                target = torch.tensor(target_list, device=tdevice).view(target_length)
+                print('target:', target.size(), target)
+                #target_length = target.size(0)
 
                 # Decoder training
                 teacher_forcing_ratio = 0.9
@@ -2219,6 +2222,11 @@ class Autoencoder(nn.Module):
                         #    break
 
                 #target = torch.ones(outputs.size(0)).to(tdevice)
+
+                # Cut off the <eos> token before calculating loss
+                decoded_words = decoded_words[:-1]
+                target = target[:-1]
+                outputs = outputs[:-1]
                 if debug: print('target:', target.size(), target)
                 #print('enc:', enc.view(-1, 1024))
                 outputs = torch.stack(outputs, dim=0)
@@ -2226,7 +2234,7 @@ class Autoencoder(nn.Module):
 
                 # Reconstruction loss
                 rec_loss = rec_criterion(outputs, target)
-                if debug: print('crossent loss:', rec_loss)
+                if debug: print('crossent loss:', rec_loss.item())
 
                 # Get the encoding of the predicted sequence
                 word_flags = [0] * len(decoded_words)
@@ -2236,7 +2244,7 @@ class Autoencoder(nn.Module):
                 _, pred_emb = self.encoder.embedder(pred_input, return_emb=True)
                 # Calculate L2 loss between true and pred enc
                 emb_loss = emb_criterion(pred_emb, emb) # OR pred_enc, encoding
-                if debug: print('emb l2 loss:', emb_loss)
+                if debug: print('emb l2 loss:', emb_loss.item())
 
                 loss = (self.gamma*emb_loss) + ((1-self.gamma)*rec_loss)
                 print('total loss:', loss.item())
@@ -2253,6 +2261,79 @@ class Autoencoder(nn.Module):
                 if torch.isnan(loss).item():
                     print('ERROR: loss is nan! At epoch', epoch, 'batch', i)
                     exit(1)
+
+            print('Evaluating autoencoder on train data...')
+            losses = []
+            acc = []
+            for row in X:
+                text = row[0]
+                #print('eval text:', text)
+                encoding, emb = self([row]) # No noise for testing
+                #outputs = outputs.view(-1, 1024)
+                #if debug: print("autoencoder encoding:", str(encoding.size()))
+
+                # Construct target matrix
+                target_list = []
+                with torch.no_grad():
+                    #for row in batchX:
+                    target_row = []
+                    #print('ae target row:', row)
+                    #target_row.append(vocab.stoi['<sos>'])
+                    for word in row[0]:
+                        target_word = vocab.stoi[word]
+                        target_row.append(target_word)
+                    #target_row.append(vocab.stoi['<eos>'])
+                    #target_list.append(target_row)
+                    target_length = len(target_row)
+                    target = torch.tensor(target_row, device=tdevice).view(target_length)
+                    #target_length = target.size(0)
+
+                    decoded_token = torch.tensor([vocab.stoi['<sos>']], dtype=torch.long, device=tdevice)
+                    decoder_input = decoded_token
+                    decoder_hidden = encoding
+                    outputs = []
+                    loss = 0
+                    decoded_words = []
+
+                    for di in range(target_length):
+                        decoder_output, decoder_hidden = self.decoder(decoder_input, decoder_hidden)
+                        topv, topi = decoder_output.topk(1)
+                        decoder_input = topi.squeeze().detach()  # detach from history as input
+
+                        # Print the predicted output for debugging
+                        token = vocab.itos[decoder_input.item()]
+                        #if debug: print('decoded token:', decoder_input, token)
+                        decoded_words.append(token)
+                        #outputs.append(decoder_input)
+
+                        crit_output = decoder_output.view(1, -1)
+                        #crit_target = target[di].view(1)
+                        outputs.append(crit_output.squeeze())
+
+                    print('ae eval target:', text)
+                    print('ae eval output:', decoded_words)
+                    outputs = torch.stack(outputs, dim=0)
+                    recon_loss = torch.nn.functional.cross_entropy(outputs, target)
+                    losses.append(recon_loss)
+
+                    # Calculate accuracy
+                    corr_count = 0
+                    #print('eval len target:', target_length, len(text), 'pred:', len(decoded_words))
+                    for index in range(0, target_length-1):
+                        corr_token = text[index]
+                        pred_token = decoded_words[index]
+                        if corr_token == pred_token:
+                            corr_count += 1
+                    accuracy = float(corr_count) / float(target_length)
+                    #print('eval token acc:', accuracy)
+                    acc.append(accuracy)
+
+            total_loss = torch.mean(torch.stack(losses, dim=0))
+            print('avg recon loss (train set):', total_loss.item())
+            acc_tensor = torch.tensor(acc)
+            #print('acc:', acc_tensor.size())
+            total_acc = torch.mean(acc_tensor)
+            print('avg recon acc (train set):', total_acc.item())
 
         print('Saving autoencoder to:', self.file)
         torch.save(self, self.file)
@@ -2392,7 +2473,7 @@ class Embedder(nn.Module):
         if self.use_gru:
             self.gru0 = nn.GRU(self.input_size+1, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).to(tdevice)
 
-    def forward(self, row, hn=None, return_emb=False):
+    def forward(self, row, hn=None, return_emb=False, noise_factor=0.0):
         context = row[0]
         print('context:', context)
         word_flags = row[1]
@@ -2409,10 +2490,6 @@ class Embedder(nn.Module):
             bert_output = self.bert(input_ids)[0]  # Models outputs are now tuples
             print('bert output:', bert_output.size())
             uttX = bert_output
-            #uttX = bert_output[:, -1, :].view(self.input_size) # Only keep the output of the last timestep
-            #encoding, hn = self.gru0(x, hn)
-            #enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
-            #del x
             del bert_output
 
         elif self.encoder_name == 'elmo':
@@ -2430,13 +2507,21 @@ class Embedder(nn.Module):
             enc = self.autoencoder.encode([row]).squeeze()#.detach() # should be (1, encoding_dim)
         else:
         '''
+
+        # Noise for autoencoder
+        if noise_factor > 0:
+            print('adding noise:', noise_factor)
+            uttX_input = uttX + noise_factor * torch.randn(*uttX.size(), device=tdevice)
+        else:
+            uttX_input = uttX
         if self.use_gru:
             # Append the target flags
             c_flags = torch.tensor(word_flags, dtype=torch.float, device=tdevice).view(1, -1, 1)
-            print('X:', uttX.size(), 'c_flags:', c_flags.size())
+            print('X:', uttX_input.size(), 'c_flags:', c_flags.size())
+            uttX_input = torch.cat((uttX_input, c_flags), dim=2) # Noise version
             uttX = torch.cat((uttX, c_flags), dim=2)
 
-            encoding, hn = self.gru0(uttX, hn)
+            encoding, hn = self.gru0(uttX_input, hn)
             enc = encoding[:, -1, :].view(1, 1, self.encoding_size) # Only keep the output of the last timestep
         else:
             enc = uttX
