@@ -178,7 +178,7 @@ class DataAdapter:
         seq_columns = data_scheme.seq()
         target_df = pandas.DataFrame(columns=seq_columns)
         for i, row in df.iterrows():
-            print('to_seq row:', str(row))
+            if self.debug: print('to_seq row:', str(row))
             labeled_seqs = []
             if len(row['tags']) > 0:
                 labeled_seqs = self.ann_to_seq(row['text'], row['tags'], split_sents)
@@ -223,7 +223,7 @@ class DataAdapter:
                 narr_ref = re.sub("\.  ", ". $", narr_ref)
         else:
             narr_ref = narr.replace('\n', ' ').strip() # Replace newlines with spaces so words get separated
-        print('narr_ref:', narr_ref)
+        if self.debug: print('narr_ref:', narr_ref)
         tags = []
         seqs = [] # a list of tuples (word, label)
 

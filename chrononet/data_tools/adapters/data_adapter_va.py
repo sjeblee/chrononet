@@ -13,7 +13,7 @@ from data_tools import data_util
 class DataAdapterVA(DataAdapter):
 
     def load_data(self, filename, drop_unlabeled=True):
-        print('DataAdapterVA.load_data', filename)
+        if self.debug: print('DataAdapterVA.load_data', filename)
         df = pandas.DataFrame(columns=self.column_names)
 
         # Loop through data entries and create a row for each record
@@ -40,7 +40,7 @@ class DataAdapterVA(DataAdapter):
                     tag_narr = etree.tostring(tag_node, encoding='utf8').decode('utf8')
                     #print('tag_narr orig:', tag_narr)
                     tag_narr = data_util.fix_xml_tags(tag_narr)
-                    print('tag_narr fixed:', tag_narr)
+                    if self.debug: print('tag_narr fixed:', tag_narr)
                     row['tags'] = tag_narr
                     elem = data_util.load_xml_tags(row['tags'], decode=False, unwrap=True)
                     event_elem = etree.Element('events')
@@ -53,20 +53,20 @@ class DataAdapterVA(DataAdapter):
 
                 # Drop records with no annotated events
                 if drop_unlabeled and num_events == 0:
-                    print('Dropping record with no events:', row['docid'])
+                    if self.debug: print('Dropping record with no events:', row['docid'])
                     continue
                 else:
-                    print('Loaded events:', num_events)
+                    if self.debug: print('Loaded events:', num_events)
 
                 if event_elem is not None:
                     row['events'] = etree.tostring(event_elem).decode('utf8')
                     row['event_ranks'] = data_util.extract_ranks(row['tags'])
-                    print(row['docid'], 'event_ranks:', row['event_ranks'])
+                    if self.debug: print(row['docid'], 'event_ranks:', row['event_ranks'])
                 else:
                     row['events'] = ''
                     row['event_ranks'] = ''
                 row['diagnosis'] = str(child.find('cghr_cat').text)
-                print('cghr_cat:', row['diagnosis'])
+                if self.debug: print('cghr_cat:', row['diagnosis'])
                 date_node = child.find('DeathDate')
                 if date_node is None:
                     date_node = child.find('Death_YR_Month')

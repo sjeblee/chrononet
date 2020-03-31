@@ -16,7 +16,7 @@ import re
 import subprocess
 import torch
 
-debug = True
+debug = False
 
 #def clean_file(filename):
     # remove blank lines | remove extra spaces| remove leading and trailing spaces  | fix utf-8 chars
@@ -116,15 +116,15 @@ def extract_ranks(events, event_list=None, allow_empty=False):
 
     event_count = 0
     for event in elem:
-        print('child tag:', event.tag)
+        if debug: print('child tag:', event.tag)
         if event.tag == 'EVENT':
             event_count += 1
-            print('elem event:', etree.tostring(event))
+            #print('elem event:', etree.tostring(event))
             if event_list is None:
                 rank = event.get('rank')
             else:
                 eventid = event.get('eid')
-                print('looking up eid', eventid)
+                #print('looking up eid', eventid)
                 rank = event_map[eventid]
             if rank is None:
                 print('ERROR: no rank attribute found:', etree.tostring(event))
@@ -138,7 +138,7 @@ def extract_ranks(events, event_list=None, allow_empty=False):
             ranks.append(int(rank))
             #if int(rank) == 0:
             #    print('WARNING: rank is 0:', etree.tostring(event))
-    print('events:', event_count, 'ranks:', len(ranks))
+    if debug: print('events:', event_count, 'ranks:', len(ranks))
     assert(len(ranks) == event_count)
     return ranks
 
@@ -256,8 +256,8 @@ def load_time_pairs(filename):
 
 
 def load_xml_tags(ann, unwrap=True, decode=False):
-    #print('load_xml_tags:', ann)
-    if decode:
+    if debug: print('load_xml_tags:', ann)
+    if decode or type(ann) is not str:
         ann = ann.decode('utf8')
     if unwrap:
         ann_xml = etree.fromstring(ann)

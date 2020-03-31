@@ -140,7 +140,7 @@ class DataAdapterVerilogue(DataAdapter):
                         ann_ranks.append(None)
             row['events'] = events
             row['event_ranks'] = ann_ranks
-            print(docid, 'event_ranks:', row['event_ranks'])
+            if self.debug: print(docid, 'event_ranks:', row['event_ranks'])
 
             # Get utterances
             turns = transcripts.find("turns")
@@ -172,17 +172,17 @@ class DataAdapterVerilogue(DataAdapter):
     split_sents: NOT IMPLEMENTED YET
     '''
     def ann_to_seq(self, narr, ann, split_sents, ncrf=False):
-        print('ann:', type(ann))
+        if self.debug: print('ann:', type(ann))
         if ann is not None:
             #annObj = AnnotationSaveObject()
             #annObj.fromObj(json.loads(ann))
-            print('loaded annotations:', len(ann))
+            if self.debug: print('loaded annotations:', len(ann))
         narr_ref = etree.fromstring(narr.decode('utf8')) # Load utterances
         utt_map = {}
         for entry in narr_ref:
             #utt = etree.fromstring(entry)
             uid = entry.attrib['seqNo']
-            print('ann_to_seq: uid:', uid)
+            if self.debug: print('ann_to_seq: uid:', uid)
             utt_map[int(uid)] = entry
 
         '''
@@ -207,7 +207,7 @@ class DataAdapterVerilogue(DataAdapter):
                 seqs.append(utt_seqs)
         else:
             for item in ann:
-                print('element:', item.tag)
+                if self.debug: print('element:', item.tag)
                 #if item.tag != 'TIMEX3':
                 utt_num = -1
                 for span in item.spans:
@@ -239,21 +239,21 @@ class DataAdapterVerilogue(DataAdapter):
                 utt_seqs = []
 
                 for tag in utt_tags:
-                    print('- tag span:', tag.start, tag.end, 'index:', index)
+                    if self.debug: print('- tag span:', tag.start, tag.end, 'index:', index)
 
                     if tag.start < index:
                         print("WARNING: dropping overlapping reference tag")
                         continue
                     if tag.start > index:
                         text = utt_text[index:tag.start]
-                        print('getting OO seq:', index, tag.start, text)
+                        if self.debug: print('getting OO seq:', index, tag.start, text)
                         index = tag.start
                         self.get_seqs(text, OO, utt_seqs)
                     if tag.element.tag != 'TIMEX3':
                         label = BE
                     elif tag.element.tag == 'TIMEX3':
                         label = BT
-                    print('getting label seq:', tag.start, tag.end, utt_text[tag.start:tag.end])
+                    if self.debug: print('getting label seq:', tag.start, tag.end, utt_text[tag.start:tag.end])
                     for word in self.split_words(utt_text[tag.start:tag.end]):
                         utt_seqs.append((word, label))
                         if label == BE:
@@ -267,6 +267,7 @@ class DataAdapterVerilogue(DataAdapter):
                     text = utt_text[index:]
                     self.get_seqs(text, OO, utt_seqs)
                 seqs.append(utt_seqs)
+                print('utt_seqs:', utt_seqs)
 
         # Split sentences
         '''
@@ -319,7 +320,7 @@ class DataAdapterVerilogue(DataAdapter):
             new_row = {}
             new_row['docid'] = docid
             new_row['seq'] = row['seq']
-            new_row['seq_labels'] = row['seq_labels']
+            new_row['seq_labels'] = seq_labels #row['seq_labels']
 
             orig_row = df_orig.loc[df_orig['docid'] == docid].iloc[0]
             new_row['diagnosis'] = orig_row['diagnosis']
