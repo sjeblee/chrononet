@@ -15,7 +15,7 @@ from data_tools.temporal_util import Event, TimeRel
 
 
 # Global variables
-debug = False
+debug = True
 unk = "UNK"
 none_label = "NONE"
 node_to_ids = {}
@@ -106,13 +106,13 @@ def create_graph(xml_node, relation_set='exact', return_event_map=False, find_mo
 
     for timex in times:
         time_id = timex.attrib['tid']
-        #print("adding time: ", time_id, timex.text)
+        if debug: print("adding time: ", time_id, timex.text)
         graph.add_node(time_id, label=timex.text)
         timex_map[time_id] = timex
         if 'functionInDocument' in timex.attrib and timex.attrib['functionInDocument'] == 'CREATION_TIME':
             dct = timex
         elif dct is not None:
-            timex.attrib['dct'] = tutil.time_value(dct)
+            timex.attrib['dct'] = tutil.time_value(dct, return_text=True)
 
     if debug:
         print("nodes:", str(len(graph.nodes())))
@@ -164,7 +164,8 @@ def create_graph(xml_node, relation_set='exact', return_event_map=False, find_mo
         e = event_map[event_id]
         if id2 == event_id:
             rel_type = tutil.reverse_relation(rel_type)
-        add_time_to_event(e, timex_map[time_id], rel_type)
+        if timex_map[time_id] is not None:
+            add_time_to_event(e, timex_map[time_id], rel_type)
 
     # Resolve cycles in original graph
     graph, num_cycles = resolve_cycles(graph)
@@ -421,8 +422,9 @@ def add_edge(graph, node1, node2, rel, priority=2):
     rel_type: the relation type (presumably from event to time)
 '''
 def add_time_to_event(event, time, rel_type):
+    print('add_time_to_event:', time, rel_type, 'event:', event)
     tag = ""
-    tval = tutil.time_value(time)
+    tval = tutil.time_value(time, return_text=True)
     if rel_type == 'BEGINS-ON':
         if event.start == unk:
             event.start = tval
@@ -464,7 +466,7 @@ def add_time_to_event(event, time, rel_type):
             event.overlap = tval
             tag = "overlap"
         # Update start and end information based on overlap
-        if event.start != unk:
+        if event.start is not None and event.start != unk:
             rel = tutil.compare_times(event.start, event.overlap)
             if rel == 'AFTER' and event.start_type == TimeRel.BEFORE:
                 event.start = tval
