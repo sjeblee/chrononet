@@ -78,23 +78,30 @@ def to_labels(df, labelname, labelencoder=None, encode=True):
             norm_ranks = []
             if type(rank_list) == str:
                 rank_list = ast.literal_eval(rank_list)
-            min_rank = float(numpy.amin(numpy.asarray(rank_list), axis=None))
+            min_rank = float(numpy.nanmin(numpy.array(rank_list, dtype=numpy.float), axis=None))
             # Scale min rank to 0
-            if min_rank > 0:
+            if min_rank is not numpy.nan and min_rank > 0:
                 rank_list_scaled = []
                 for rank in rank_list:
-                    rank_list_scaled.append(rank - min_rank)
+                    if rank is None or rank is numpy.nan:
+                        rank_list_scaled.append(-1)
+                    else:
+                        rank_list_scaled.append(rank - min_rank)
                 rank_list = rank_list_scaled
             if encode:
-                max_rank = float(numpy.amax(numpy.asarray(rank_list), axis=None))
-                if max_rank == 0:
+                max_rank = float(numpy.nanmax(numpy.array(rank_list, dtype=numpy.float), axis=None))
+                if max_rank == numpy.nan or max_rank == 0:
                     print('WARNING: max rank is 0')
                     norm_ranks = rank_list # Don't normalize if they're all 0
                 else: # Normalize
                     norm_ranks = []
                     for rank in rank_list:
-                        norm_ranks.append(float(rank)/max_rank)
+                        if rank is None or rank == -1:
+                            norm_ranks.append(float(-1))
+                        else:
+                            norm_ranks.append(float(rank)/max_rank)
                     rank_list = norm_ranks
+            print('normalized ranks', rank_list)
             enc_labels.append(numpy.asarray(rank_list))
         labels = enc_labels
 

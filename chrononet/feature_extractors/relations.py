@@ -30,8 +30,8 @@ def extract_relations(df, target_df):
 
     return target_df
 
-def extract_time_pairs(df):
-    verilogue = False
+def extract_time_pairs(df, verilogue=False):
+    print('extract_time_pairs')
     df['feats'] = ''
     df['time_order'] = ''
     for i, row in df.iterrows():
@@ -42,26 +42,29 @@ def extract_time_pairs(df):
         # Create timeid map
         timex_map = {}
         text = row['text']
-        print('narr text:', text)
+        #print('narr text:', text)
 
-        if type(row['events'])is list:
+        if type(row['events']) is list:
+            print('found verilogue data')
             verilogue = True
             events = row['events']
             tags = row['tags']
+            print('tags:', tags)
             # TIMEX map
             for tag in tags:
-                if tag.tag == 'TIMEX3':
-                    tid = int(tag.features['annotation_id'])
+                if tag.tag.upper() == 'TIMEX3':
+                    tid = str(tag.features['annotation_id'])
                     timex_map[tid] = tag
+                    print('timex_map added:', tid, tag.features['rawText'])
         else:
             events = etree.fromstring(row['events'])
             tags = data_util.load_xml_tags(row['tags'], decode=False)
 
             # TIMEX map
             for timex in tags.findall('TIMEX3'):
-                tid = timex.get('id')
-                if tid is None:
-                    tid = timex.get('tid')
+                tid = str(timex.get('id'))
+                #if tid is None:
+                #    tid = str(timex.get('tid'))
                 timex_map[tid] = timex
 
         for event_num in range(len(events)):
@@ -79,15 +82,19 @@ def extract_time_pairs(df):
                 time_id_string = event.get('relatedToTime')
             time_words = None
             if time_id_string is not None:
-                time_id = time_id_string.split(',')[0] # Just get the first time phrase
+                time_id = str(time_id_string.split(',')[0]) # Just get the first time phrase
                 if time_id not in timex_map:
                     print('WARNING: time_id not found:', time_id)
                 else:
                     timex = timex_map[time_id]
-                    time_text = timex.text
+                    if verilogue:
+                        time_text = timex.features['rawText']
+                    else:
+                        time_text = timex.text
                     time_words = data_util.split_words(time_text)
                     time_phrases.append(time_words)
                     time_ranks.append(rank)
+                    print('found time phrase:', time_text, rank)
         time_pairs = []
         time_pair_orders = []
         for tp in range(len(time_phrases)):
@@ -97,13 +104,15 @@ def extract_time_pairs(df):
                     rank1 = time_ranks[tp]
                     time2 = time_phrases[tp2]
                     rank2 = time_ranks[tp2]
-                    time_pairs.append((time1, time2))
-                    label = 'SIMULTANEOUS'
-                    if rank1 < rank2:
-                        label = 'BEFORE'
-                    elif rank1 > rank2:
-                        label = 'AFTER'
-                    time_pair_orders.append(label)
+                    print('time pair:', time1, rank1, time2, rank2)
+                    if rank1 is not None and rank2 is not None:
+                        time_pairs.append((time1, time2))
+                        label = 'SIMULTANEOUS'
+                        if rank1 < rank2:
+                            label = 'BEFORE'
+                        elif rank1 > rank2:
+                            label = 'AFTER'
+                        time_pair_orders.append(label)
 
         df.at[i, 'feats'] = time_pairs
         df.at[i, 'time_order'] = time_pair_orders

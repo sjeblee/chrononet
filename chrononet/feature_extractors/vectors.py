@@ -172,18 +172,19 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5, u
         text = row['text'].strip() # NOTE: we need to strip the extra whitespace to get the right event spans
 
         # Verilogue data processing
-        if type(text) is list:
+        if type(row['tags']) is list:
             verilogue = True
         if verilogue:
             tags = row['tags']
             events = row['events']
             for item in tags:
                 if item.tag == 'TIMEX3':
-                    timex_map[item.features['annotation_id']] = item
+                    timex_map[str(item.features['annotation_id'])] = item
             utt_map = {}
             utts = etree.fromstring(text)
             for utt in utts:
-                utt_map[int(utt.seqNo)] = utt
+                print('verilogue utt:', str(utt))
+                utt_map[int(utt.get('seqNo'))] = utt
             print('verilogue utts:', len(utts))
         else: # VA and THYME data
             print('narr text:', text)
@@ -243,17 +244,30 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5, u
                 flags.append(position) # position value
                 #if debug: print('event_vector for:', event_text)
 
-            # TODO
-
             # Get time phrase if there is one
+            time_words = None
+            time_val = None
+            tflags = []
             if verilogue:
-                #time_id_string = event.features['relatedToTime']
-                time_id_string = None # TEMP
+                if 'relatedToTime' in event.features:
+                    time_id_string = event.features['relatedToTime']
+                    time_id = time_id_string.split(',')[0] # Just get the first time phrase
+                    if time_id not in timex_map:
+                        print('WARNING: time_id not found:', time_id)
+                    else:
+                        timex = timex_map[time_id]
+                        time_text = timex.features['rawText']
+                        print('ver time text:', time_text)
+                        if use_bert:
+                            time_words = bert_tokenizer.tokenize(time_text)
+                        else:
+                            time_words = data_util.split_words(time_text)
+                        for tw in time_words:
+                            tflags.append(1)
+                else:
+                    time_id_string = None
             else:
                 time_id_string = event.get('relatedToTime')
-                time_words = None
-                time_val = None
-                tflags = []
                 if time_id_string is not None:
                     time_id = time_id_string.split(',')[0] # Just get the first time phrase
                     if time_id not in timex_map:
