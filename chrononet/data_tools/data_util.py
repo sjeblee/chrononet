@@ -245,6 +245,7 @@ def generate_permutations(ids, x, y):
 
 
 def load_time_pairs(filename):
+    print('load time pairs:', filename)
     time_df = pandas.read_csv(filename, header=None, index_col=False)
     time_df.columns = ['time1', 'time2', 'order']
     pairs = []
@@ -252,6 +253,7 @@ def load_time_pairs(filename):
     for i, row in time_df.iterrows():
         pairs.append((split_words(row['time1']), split_words(row['time2'])))
         labels.append(row['order'])
+        #print('loaded time pair:', pairs[-1], labels[-1])
     return pairs, labels
 
 

@@ -43,10 +43,11 @@ def to_feats(df, use_numpy=True, doc_level=False, feat_names=None):
             else:
                 feats.append(flist)
             #if debug:
-            #print('to_feats: ', row['docid'], 'feats:', len(flist))
+            #    print('to_feats: ', row['docid'], 'feats:', flist)
             if debug and i == 0:
-                if len(flist) > 0:
-                    print('feats[0]:', type(flist[0]), flist[0])
+                print('feats:', flist)
+                #if len(flist) > 0:
+                #    print('feats[0]:', type(flist[0]), flist[0])
         if len(feat_columns) > 1:
             feats.append(mini_feat_list)
 
@@ -76,31 +77,32 @@ def to_labels(df, labelname, labelencoder=None, encode=True):
         enc_labels = []
         for rank_list in labels:
             norm_ranks = []
-            if type(rank_list) == str:
-                rank_list = ast.literal_eval(rank_list)
-            min_rank = float(numpy.nanmin(numpy.array(rank_list, dtype=numpy.float), axis=None))
-            # Scale min rank to 0
-            if min_rank is not numpy.nan and min_rank > 0:
-                rank_list_scaled = []
-                for rank in rank_list:
-                    if rank is None or rank is numpy.nan:
-                        rank_list_scaled.append(-1)
-                    else:
-                        rank_list_scaled.append(rank - min_rank)
-                rank_list = rank_list_scaled
-            if encode:
-                max_rank = float(numpy.nanmax(numpy.array(rank_list, dtype=numpy.float), axis=None))
-                if max_rank == numpy.nan or max_rank == 0:
-                    print('WARNING: max rank is 0')
-                    norm_ranks = rank_list # Don't normalize if they're all 0
-                else: # Normalize
-                    norm_ranks = []
+            if len(rank_list) > 0:
+                if type(rank_list) == str:
+                    rank_list = ast.literal_eval(rank_list)
+                min_rank = float(numpy.nanmin(numpy.array(rank_list, dtype=numpy.float), axis=None))
+                # Scale min rank to 0
+                if min_rank is not numpy.nan and min_rank > 0:
+                    rank_list_scaled = []
                     for rank in rank_list:
-                        if rank is None or rank == -1:
-                            norm_ranks.append(float(-1))
+                        if rank is None or rank is numpy.nan:
+                            rank_list_scaled.append(-1)
                         else:
-                            norm_ranks.append(float(rank)/max_rank)
-                    rank_list = norm_ranks
+                            rank_list_scaled.append(rank - min_rank)
+                    rank_list = rank_list_scaled
+                if encode:
+                    max_rank = float(numpy.nanmax(numpy.array(rank_list, dtype=numpy.float), axis=None))
+                    if max_rank == numpy.nan or max_rank == 0:
+                        print('WARNING: max rank is 0')
+                        norm_ranks = rank_list # Don't normalize if they're all 0
+                    else: # Normalize
+                        norm_ranks = []
+                        for rank in rank_list:
+                            if rank is None or rank == -1:
+                                norm_ranks.append(float(-1))
+                            else:
+                                norm_ranks.append(float(rank)/max_rank)
+                        rank_list = norm_ranks
             print('normalized ranks', rank_list)
             enc_labels.append(numpy.asarray(rank_list))
         labels = enc_labels
@@ -112,6 +114,7 @@ def to_labels(df, labelname, labelencoder=None, encode=True):
         labels = encode_labels_plain(labels)
     if debug: print('to_labels:', labelname, 'encode:', encode, 'labels:', len(labels))
     return labels, labelencoder
+
 
 def create_labelencoder(data, num=0):
     global labelencoder, onehotencoder, num_labels
@@ -206,9 +209,9 @@ def decode_all_labels(data, labenc=None):
 ''' Put 0 features corresponding to the labels if no features are required for the model
     (i.e. for random or mention order)
 '''
-def dummy_function(df, doc_level=False):
+def dummy_function(df, feat_name='feats', doc_level=False):
     #print('dummy_function')
-    df['feats'] = '0'
+    df[feat_name] = '0'
     if not doc_level:
         for i, row in df.iterrows():
             fake_feats = []
@@ -217,12 +220,14 @@ def dummy_function(df, doc_level=False):
             if type(event_list) == str:
                 #event_list = eval(event_list)
                 event_list = ast.literal_eval(event_list)
-            if debug: print(row['docid'], 'dumm_function events len:', len(event_list))
+            if debug: print(row['docid'], 'dummy_function events len:', len(event_list))
             for entry in event_list:
                 fake_feats.append(0)
             df.at[i, 'feats'] = fake_feats
             print('dummy_function:', row['docid'], 'feats:', len(fake_feats))
     return df
 
-def do_nothing(df, doc_level=False):
+def do_nothing(df, feat_name='feats', doc_level=False):
+    if feat_name not in df.columns:
+        df[feat_name] = '0'
     return df

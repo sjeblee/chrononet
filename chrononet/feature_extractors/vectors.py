@@ -24,8 +24,8 @@ def event_vectors_flat(df, vec_model):
 
 ''' Convert the dataframe feature column to a numpy array for processing
 '''
-def event_vectors(df, vec_model, flatten=False):
-    df['feats'] = ''
+def event_vectors(df, feat_name='feats', vec_model=None, flatten=False):
+    df[feat_name] = ''
     for i, row in df.iterrows():
         if debug: print('event_vectors', str(i))
         events = etree.fromstring(row['events'])
@@ -147,22 +147,23 @@ def word_vectors(df, vec_model):
     print("TODO")
 
 
-def bert_event_vectors(df, flatten=False, use_iso_value=False, context_size=5):
+def bert_event_vectors(df, feat_name='feats', flatten=False, use_iso_value=False, context_size=5):
     print('bert_event_vectors')
-    return elmo_event_vectors(df, flatten, use_iso_value, context_size, use_bert=True)
+    return elmo_event_vectors(df, feat_name, flatten, use_iso_value, context_size, use_bert=True)
 
 
 ''' Convert the dataframe feature column to a numpy array for processing
 '''
-def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5, use_bert=False):
+def elmo_event_vectors(df, feat_name='feats', flatten=False, use_iso_value=False, context_size=5, use_bert=False):
     verilogue = False
+    filter_missing_ranks = True
 
     # Create the time type encoder
     time_types = ['UNK', 'DATE', 'TIME', 'DATETIME', 'DURATION', 'SET']
     timetypeencoder = LabelEncoder()
     timetypeencoder.fit(time_types)
 
-    df['feats'] = ''
+    df[feat_name] = ''
     for i, row in df.iterrows():
         if debug: print('event_vectors', str(i))
         # Create timeid map
@@ -318,25 +319,29 @@ def elmo_event_vectors(df, flatten=False, use_iso_value=False, context_size=5, u
                             time_words = signal_words + time_words # Add signal words to time phrase
                             tflags = sflags + tflags # Append time word flags
 
+                        # Add the time type
+                        tflags = [0] + tflags
+                        time_words = [time_type] + time_words # Append the time type to the beginning of the list
+
             #vec = data_util.split_words(event_text)
             vec, context, c_flags = context_words(prev, event_text, next, max_len=context_size, use_bert=use_bert)
             #words, word_flags = context_words(prev, event_text, next)
             time_type_enc = [0, 0, 0, 0, 0]
             event_vecs.append((context, c_flags, time_words, tflags, time_val, time_type_enc))
-        df.at[i, 'feats'] = event_vecs
+        df.at[i, feat_name] = event_vecs
     return df
 
 
 ''' Convert the dataframe feature column to a numpy array for processing
 '''
-def elmo_word_vectors(df):
-    df['feats'] = ''
+def elmo_word_vectors(df, feat_name='feats'):
+    df[feat_name] = ''
     for i, row in df.iterrows():
         if debug: print('elmo words', str(i))
         text = row['text']
         print('narr text:', text)
         words = data_util.split_words(text)
-        df.at[i, 'feats'] = words
+        df.at[i, feat_name] = words
     return df
 
 def elmo_vectors(elmo, prev, words, next, flags):

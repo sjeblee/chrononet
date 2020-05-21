@@ -16,7 +16,10 @@ from transformers import BertModel, BertTokenizer
 #from sklearn.utils import shuffle
 
 from .pytorch_models import Autoencoder, Embedder
+from models.loss_functions import listMLE
+from swarm_mod.models import MaskedSequential, Dropout2dChannelsLast
 from swarm_mod.swarmlayer import SwarmLayer
+from swarm_mod.set_transformer import InducedSetAttentionBlock, RFF
 
 numpy.set_printoptions(threshold=numpy.inf)
 debug = True
@@ -41,9 +44,9 @@ print('Current cuda device ', torch.cuda.current_device())
 
 
 # Set transformer models
-class SetOrderBert(nn.Module):
-    def __init__(self, input_size, encoding_size, time_encoding_size, hidden_size, output_size, encoder_file, dropout_p=0.1, use_autoencoder=False, autoencoder_file=None, checkpoint_dir=None, encoder_name='elmo'):
-        super(SetOrderBert, self).__init__()
+class SetOrder(nn.Module):
+    def __init__(self, input_size, encoding_size, time_encoding_size, hidden_size, output_size, encoder_file, dropout_p=0.1, use_autoencoder=False, autoencoder_file=None, checkpoint_dir=None, encoder_name='elmo', set_layer='st'):
+        super(SetOrder, self).__init__()
 
         self.hidden_size = hidden_size
         self.input_size = input_size
@@ -52,36 +55,57 @@ class SetOrderBert(nn.Module):
         self.output_size = output_size
         self.dropout = dropout_p
         self.checkpoint_dir = checkpoint_dir
-        print('SetOrderBert checkpoint_dir:', self.checkpoint_dir)
+        self.set_layer = set_layer
+        self.ae_trained = False
+        print('SetOrder checkpoint_dir:', self.checkpoint_dir)
 
         self.use_autoencoder = use_autoencoder
         #self.use_autoencoder = False
 
         if autoencoder_file is None:
             autoencoder_file = ''
+        print('SetOrder ae file:', autoencoder_file, os.path.exists(autoencoder_file))
         if self.use_autoencoder is True:
             if os.path.exists(autoencoder_file):
+                print('loading previous ae from autoencoder_file')
                 self.autoencoder = torch.load(autoencoder_file)
+                self.ae_trained = True
             else:
                 #self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
+                print('training a new ae')
                 self.autoencoder = Autoencoder(input_size, encoding_size, use_double=False, autoencoder_file=autoencoder_file, encoder_name=encoder_name)
         else:
             self.embedder = Embedder(encoder_name, encoding_size)
 
-        self.set_layer = SwarmLayer(hidden_size, hidden_size, hidden_size, n_iter=10, n_dim=1, dropout=0.0, pooling='MEAN', channel_first=True, cache=False)
+        if set_layer == 'swarm':
+            self.set_layer = SwarmLayer(hidden_size, hidden_size, hidden_size, n_iter=10, n_dim=1, dropout=0.0, pooling='MEAN', channel_first=True, cache=False)
+
+        elif set_layer == 'st':
+            n_layers = 1
+            n_heads = 4
+            n_ind_points = 16
+
+            #layers = [nn.Linear(self.hidden_size, self.hidden_size)]
+            layers = []
+            for _ in range(n_layers):
+                layers.append(InducedSetAttentionBlock(d=self.hidden_size, m=n_ind_points, h=n_heads, first_rff=RFF(d=self.hidden_size), second_rff=RFF(d=self.hidden_size)))
+                if self.dropout>0.0:
+                    layers.append(Dropout2dChannelsLast(p=self.dropout))
+                layers.append(nn.Linear(self.hidden_size, self.output_size))
+            self.set_layer = MaskedSequential(*layers)
 
         print('time encoder file:', encoder_file)
         self.time_encoder = torch.load(encoder_file).model # TimeEncoder(self.input_size, self.time_encoding_size, self.elmo)
         self.linear = nn.Linear(hidden_size, output_size)
-        self.softmax = nn.Softmax(dim=2)
+        self.softmax = nn.Softmax(dim=1)
 
     ''' Input is a list of lists of numpy arrays
     '''
     def forward(self, input, X2=None, is_test=False):
         # input expected as (events, words, embedding_dim)
         encodings = []
-        hn = None
-        hn_e = None
+        #hn = None
+        #hn_e = None
         index = 0
         #extra_size = 0
 
@@ -125,7 +149,7 @@ class SetOrderBert(nn.Module):
             if self.use_autoencoder:
                 enc = self.autoencoder.encode([row]).squeeze()
             else:
-                enc = self.embedder(row)
+                enc = self.embedder(row).view(self.encoding_size)
 
             to_concat.append(enc)
             if debug: print('enc:', str(enc.size()))
@@ -185,24 +209,33 @@ class SetOrderBert(nn.Module):
         print('conversation resized:', conversation.size())
 
         # Set layer
-        output_batch = self.set_layer(conversation)
-        output_batch = output_batch.squeeze()
-        print('output:', output_batch.size())
-        #out1 = output_batch
-        out1 = self.linear(output_batch)
-        #output = output_batch
-        '''
-            if output is None:
-                output = output_batch
-            else:
-                output = torch.cat((output, output_batch), dim=1)
-            if out1 is None:
-                out1 = out1_batch
-            else:
-                out1 = torch.cat((out1, out1_batch), dim=1)
-            print('output size so far:', output.size())
-        '''
-        #out1 = self.softmax(self.linear(output))
+        if self.set_layer == 'swarm':
+            output_batch = self.set_layer(conversation)
+            output_batch = output_batch.squeeze()
+            print('output:', output_batch.size())
+            #out1 = output_batch
+            out1 = self.linear(output_batch)
+            #output = output_batch
+            '''
+                if output is None:
+                    output = output_batch
+                else:
+                    output = torch.cat((output, output_batch), dim=1)
+                if out1 is None:
+                    out1 = out1_batch
+                else:
+                    out1 = torch.cat((out1, out1_batch), dim=1)
+                print('output size so far:', output.size())
+            '''
+            #out1 = self.softmax(self.linear(output))
+        else:
+            conversation = conversation.view(1, -1, self.hidden_size)
+            print('conversation resized:', conversation.size())
+            output_batch = self.set_layer(conversation, mask=None)
+            output_batch = self.softmax(output_batch)
+            output_batch = output_batch.squeeze()
+            print('output:', output_batch.size())
+            out1 = output_batch
 
         if is_test:
             encodings = []
@@ -222,7 +255,7 @@ class SetOrderBert(nn.Module):
         Y: a list of training labels
         WARNING: Currently you can't use the encoding layer and use_prev_labels at the same time
     '''
-    def fit(self, X, Y, activation='relu', num_epochs=10, batch_size=1, loss_function='mse', X2=None):
+    def fit(self, X, Y, activation='relu', num_epochs=10, batch_size=1, loss_function='listmle', X2=None):
         start = time.time()
 
         # Parameters
@@ -231,7 +264,7 @@ class SetOrderBert(nn.Module):
         dropout = self.dropout
         output_dim = self.output_size
         learning_rate = 0.01
-        print_every = 100
+        print_every = 1
         #teacher_forcing_ratio = 0.9
 
         print("hidden_size:", str(hidden_size), "dropout:", str(dropout), "epochs:", str(num_epochs))
@@ -280,6 +313,8 @@ class SetOrderBert(nn.Module):
             criterion = nn.MSELoss()
         elif loss_function == 'l1':
             criterion = nn.L1Loss()
+        elif loss_function == 'listmle':
+            criterion = listMLE
         else:
             print("WARNING: need to add loss function!")
 
@@ -287,7 +322,7 @@ class SetOrderBert(nn.Module):
             self = self.to(tdevice)
 
         # Train the autoencoder
-        if self.use_autoencoder:
+        if self.use_autoencoder and not self.ae_trained:
             self.autoencoder.fit(X)
 
         start_epoch = 0
@@ -391,13 +426,14 @@ class SetOrderBert(nn.Module):
                     labels = labels.view(max_length, 1)
 
                     loss = criterion(outputs, labels)
+                    #print('loss:', loss.item())
                     loss.backward()
                     optimizer.step()
 
                 if (i) % print_every == 0:
                     if debug: print('outputs:', outputs.size(), 'labels:', labels.size())
                     if debug: print('outputs:', outputs, 'labels:', labels)
-                    print('Epoch [%d/%d], Loss: %.4f' %(epoch, num_epochs, loss.data.item()))
+                    print('Epoch [%d/%d], Loss: %.4f' %(epoch, num_epochs, loss.item()))
                 i = i+batch_size
 
                 del batchX

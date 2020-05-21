@@ -184,8 +184,7 @@ class DataAdapter:
                 labeled_seqs = self.ann_to_seq(row['text'], row['tags'], split_sents)
             else:
                 labeled_seqs = self.ann_to_seq(row['text'], None, split_sents)
-            if self.debug:
-                print('labeled_seqs:', len(labeled_seqs))
+            #if self.debug: print('labeled_seqs:', len(labeled_seqs))
             sid = 0
             for labeled_seq in labeled_seqs:
                 seq = []
@@ -309,7 +308,7 @@ class DataAdapter:
     '''
     def split_words(self, text):
         #return re.findall(r"[\w']+|[.,!?;$=/\-\[\]]", text.strip())
-        print('split_words:', text)
+        #print('split_words:', text)
         return wordpunct_tokenize(text)
 
     def write_output(self, data, outdir):
@@ -429,14 +428,14 @@ class DataAdapter:
             seq_labels = list(zip(seq, labels))
             child = etree.SubElement(root, elementname)
             id_node = etree.SubElement(child, id_name)
-            id_node.text = docid
+            id_node.text = str(docid)
             text_node = etree.SubElement(child, 'narrative')
             text_node.text = str(row['text_orig'])
             narr_node = etree.SubElement(child, tag)
             narr_node.text = self.to_xml(seq_labels)
             diagnosis_node = etree.SubElement(child, diagnosis_name)
             diagnosis_node.text = str(row['diagnosis'])
-            if self.debug: print("added seq: ", narr_node.text)
+            #if self.debug: print("added seq: ", narr_node.text)
             print('diagnosis:', row['diagnosis'])
         tree = etree.ElementTree(root)
         return tree

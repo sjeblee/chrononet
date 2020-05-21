@@ -39,7 +39,7 @@ weight_file = "/h/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xh
 #
 class ElmoCNN(nn.Module):
 
-    def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=10, reduce_size=40):
+    def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=10, reduce_size=-1):
         super(ElmoCNN, self).__init__()
         #options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
         #weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
@@ -209,12 +209,13 @@ class ElmoCNN(nn.Module):
 
 class JointCNN(nn.Module):
 
-    def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=10, word_pad_size=200, reduce_size=0):
+    def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=10, word_pad_size=200, reduce_size=0, timeline_size=128, use_double=False):
         super(JointCNN, self).__init__()
         #options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
         #weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
         self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
         emb_input_size = 1024
+        print('timeline_size:', timeline_size)
 
         #D = input_size
         C = num_classes
@@ -226,6 +227,8 @@ class JointCNN(nn.Module):
         self.pad_size = pad_size
         self.reduce_size = reduce_size
         self.cnn_input_size = emb_input_size
+        self.timeline_size = timeline_size
+        self.output_size = self.Co*self.Ks
 
         if self.reduce_size > 0:
             self.gru = nn.GRU(emb_input_size, int(self.reduce_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
@@ -234,32 +237,41 @@ class JointCNN(nn.Module):
             self.cnn_input_size = 1024
 
         self.word_cnn = MatrixCNN_module(self.cnn_input_size, dropout_p, kernel_num, kernel_sizes, word_pad_size)
-        self.timeline_cnn = MatrixCNN_module(input_size, dropout_p, kernel_num, kernel_sizes, pad_size)
+        self.timeline_cnn = MatrixCNN_module(self.timeline_size, dropout_p, kernel_num, kernel_sizes, pad_size, use_double)
 
         self.dropout = nn.Dropout(dropout_p)
-        self.fc1 = nn.Linear(self.Co*self.Ks, C) # Use this layer when train with only CNN model, i.e. No ensemble
+        self.fc1 = nn.Linear(self.output_size*2, C) # Use this layer when train with only CNN model, i.e. No ensemble
         self.logsoftmax = nn.LogSoftmax(dim=1)
 
+        # TODO: if use_double
+
     def forward(self, x):
-        #print('x:', str(x))
+        x = x[0] # Batch size 1
+        batch_size = 1
+        print('x:', str(x))
         x_words = x[0]
-        x_timeline = x[1].to(tdevice)
-        batch_size = len(x_words)
-        character_ids = batch_to_ids(x_words).to(tdevice)
+        print('x_words:', len(x_words), x_words)
+        x_timeline = x[1].to(tdevice).unsqueeze(0)#.view(1, -1, self.timeline_size)
+        #print('timeline_size:', self.timeline_size)
+        print('x_timeline:', x_timeline.size())
+        num_words = len(x_words)
+        character_ids = batch_to_ids([x_words]).to(tdevice)
         embeddings = self.elmo(character_ids)['elmo_representations']
-        #print('elmo embeddings:', embeddings[0].size())
-        X = embeddings[0].view(batch_size, -1, 1024) # (N, W, D)
+        print('elmo embeddings:', embeddings[0].size())
+        X = embeddings[0].view(batch_size, num_words, 1024) # (N, W, D)
+        print('embeddings:', X.size())
 
         if self.reduce_size > 0:
             X, hn = self.gru(X, None)
 
         word_output = self.word_cnn(X)
         print('word_output:', word_output.size())
-        timeline_output = self.timeline_cnn(x_timeline)
+        timeline_output = self.timeline_cnn(x_timeline).float()
         print('timeline_output:', timeline_output.size())
 
         output = torch.cat((word_output, timeline_output), 1)
         out = self.dropout(output)  # (N, len(Ks)*Co)
+        print('out:', out.size())
         logit = self.fc1(out)  # (N, C)
         return logit
 
@@ -281,8 +293,6 @@ class JointCNN(nn.Module):
 
         if use_cuda:
             self = self.to(tdevice)
-            for conv in self.convs:
-                conv.to(tdevice)
 
         # Train final model
         self.train(X, Y, learning_rate, batch_size)
@@ -400,11 +410,12 @@ class MatrixCNN_module(nn.Module):
         return x
 
     def forward(self, x):
-        print('x input size:', x[0].size(), x)
+        print('x input size:', x.size(), x)
         batch_size = len(x)
-        print('batch size:', batch_size)
-        X = x[0].view(batch_size, -1, self.dim) # (N, W, D)
-        X = X.to(tdevice)
+        print('batch size:', batch_size, 'dim:', self.dim)
+        #X = x[0].view(batch_size, -1, self.dim) # (N, W, D)
+        X = x.to(tdevice)
+        print('cnn_module X:', X.size())
 
         # Pad to 10 words
         if X.size(1) > self.pad_size:
@@ -414,10 +425,11 @@ class MatrixCNN_module(nn.Module):
             zero_vec = torch.zeros(X.size(0), pad, X.size(2), device=tdevice)#.double()
             if self.use_double:
                 zero_vec = zero_vec.double()
+            print('zero_vec:', zero_vec.size(), zero_vec.dtype)
             X = torch.cat((X, zero_vec), dim=1)
 
         x = X.unsqueeze(1)  # (N, Ci, W, D)]
-        print('x pad size:', x.size())
+        print('x padded size:', x.size())
         x_list = []
         for conv in self.convs:
             x_list.append(self.conv_and_pool(x, conv))

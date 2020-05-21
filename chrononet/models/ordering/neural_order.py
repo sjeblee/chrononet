@@ -8,7 +8,7 @@ from hyperopt import hp, fmin, tpe, space_eval
 from evaluation import ordering_metrics
 from models.model_base import ModelBase, ModelFactory
 from .pytorch_models import SetToSequence, SetToSequenceGroup, GRU_GRU, OrderGRU
-from .transformer_models import SetOrderBert
+from .transformer_models import SetOrder
 
 class SetOrderFactory(ModelFactory):
 
@@ -31,7 +31,7 @@ class SetOrderModel(ModelBase):
         self.epochs = int(epochs)
         use_ae = (str(use_autoencoder) == 'True')
         ae_file = os.path.join(checkpoint_dir, 'autoencoder.model')
-        self.model = SetOrderBert(self.input_size, int(encoding_size), int(time_encoding_size), int(hidden_size), output_size=self.output_size,
+        self.model = SetOrder(self.input_size, int(encoding_size), int(time_encoding_size), int(hidden_size), output_size=self.output_size,
                                   dropout_p=float(dropout),
                                   encoder_file=encoder_file,
                                   use_autoencoder=use_ae, autoencoder_file=ae_file,
@@ -76,7 +76,7 @@ class NeuralOrderModel(ModelBase):
     def fit(self, X, Y):
         self.model.fit(X, Y, num_epochs=self.epochs)
 
-    def predict(self, X, group_thresh=0.1, return_encodings=False):
+    def predict(self, X, group_thresh=0.001, return_encodings=False):
         if group_thresh is not None:
             self.model.group_thresh = group_thresh
         return self.model.predict(X, return_encodings=return_encodings)

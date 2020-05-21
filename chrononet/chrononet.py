@@ -20,21 +20,22 @@ from evaluation import eval_metrics, ordering_metrics
 from feature_extractors import numpyer, relations, syntactic, vectors
 from models.sequence.crf import CRFfactory
 from models.sequence.ncrfpp import NCRFppFactory
+from models.linking.time_linker import TimeLinkerFactory
 from models.encoding.time_encoding import TimeEncodingFactory
 from models.ordering.neural_order import NeuralOrderFactory, HyperoptNeuralOrderFactory, NeuralLinearFactory, SetOrderFactory
 from models.ordering.random_order import RandomOrderFactory, MentionOrderFactory
-from models.classification.cnn import CNNFactory, MatrixCNNFactory, RNNFactory, MatrixRNNFactory
+from models.classification.cnn import CNNFactory, MatrixCNNFactory, RNNFactory, MatrixRNNFactory, JointCNNFactory
 from models.classification.random import RandomFactory
 
 # SETUP
-fe_map = {'relations': relations.extract_relations, 'syntactic': syntactic.sent_features,
+fe_map = {'relations': relations.extract_relations, 'syntactic': syntactic.sent_features, 'spans': syntactic.span_features,
           'event_vectors': vectors.event_vectors, 'bert_vectors': vectors.bert_event_vectors, 'elmo_vectors': vectors.elmo_event_vectors, 'elmo_words': vectors.elmo_word_vectors,
           'none': numpyer.dummy_function, 'timeline': numpyer.do_nothing, 'time_pairs': relations.extract_time_pairs}
 vector_feats = ['event_vectors']
 model_map = {'crf': CRFfactory, 'random': RandomOrderFactory, 'mention': MentionOrderFactory, 'neural': NeuralOrderFactory, 'neurallinear': NeuralLinearFactory,
              'setorder': SetOrderFactory, 'hyperopt': HyperoptNeuralOrderFactory,
-             'cnn': CNNFactory, 'rnn': RNNFactory, 'matrixcnn': MatrixCNNFactory, 'matrixrnn': MatrixRNNFactory, 'ncrfpp': NCRFppFactory,
-             'randclass': RandomFactory, 'time_encoding': TimeEncodingFactory}
+             'cnn': CNNFactory, 'rnn': RNNFactory, 'matrixcnn': MatrixCNNFactory, 'matrixrnn': MatrixRNNFactory, 'jointcnn': JointCNNFactory, 'ncrfpp': NCRFppFactory,
+             'randclass': RandomFactory, 'time_encoding': TimeEncodingFactory, 'distance': TimeLinkerFactory}
 metric_map = {'p': eval_metrics.precision, 'r': eval_metrics.recall, 'f1': eval_metrics.f1, 'mae': ordering_metrics.rank_mae,
               'mse': ordering_metrics.rank_mse, 'poa': ordering_metrics.rank_pairwise_accuracy, 'tau': ordering_metrics.kendalls_tau,
               'epr': ordering_metrics.epr, 'gpr': ordering_metrics.gpr, 'csmfa': eval_metrics.csmfa}
@@ -138,15 +139,36 @@ def main():
         scores, train_df, test_df, extra_train_df = run_stage('sequence', config, train_data_adapter, test_data_adapter, seq_train_df, seq_test_df, seq_extra_train_df, outdir)
         score_report.append(scores)
 
+        #del seq_train_df
+        #del seq_test_df
+
+    # TIME LINKER STAGE
+    if 'time_link' in config:
+        #train_filename = os.path.join(outdir, inter_prefix + 'train_df_link.csv')
+        #test_filename = os.path.join(outdir, inter_prefix + 'test_df_link.csv')
+
+        if save_intermediate:
+            if debug:
+                print('Saving seq df...')
+            seq_train_df.to_csv(train_filename)
+            seq_test_df.to_csv(test_filename)
+
+        seq_extra_train_df = None
+        if extra_train_df is not None:
+            seq_extra_train_df = train_data_adapter.to_seq(extra_train_df, split_sents=True)
+
+        scores, train_df, test_df, extra_train_df = run_stage('time_link', config, train_data_adapter, test_data_adapter, seq_train_df, seq_test_df, seq_extra_train_df, outdir)
+        score_report.append(scores)
+
         del seq_train_df
         del seq_test_df
 
+    # TEMPORAL ORDERING STAGE
+    if 'ordering' in config or 'encoding' in config:
         train_df = train_data_adapter.to_doc(train_df)
         test_df = test_data_adapter.to_doc(test_df)
         doc_level_df = True
 
-    # TEMPORAL ORDERING STAGE
-    if 'ordering' in config or 'encoding' in config:
         train_filename = os.path.join(outdir, inter_prefix + 'train_df_order.csv')
         test_filename = os.path.join(outdir, inter_prefix + 'test_df_order.csv')
         if os.path.exists(train_filename):
@@ -257,6 +279,9 @@ def get_data_adapter(dataname):
     test_df: the test dataframe, with the results of previous stages
 '''
 def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_df, test_df, extra_train_df=None, outdir='', doc_level=False):
+    data_config = config['data']
+    train_dataset = data_config['train_dataset']
+    test_dataset = data_config['test_dataset']
 
     # Load config info
     stage_config = config[stage_name]
@@ -299,10 +324,11 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
 
         for fe in features:
             extractor = fe_map[fe]
+            feat_name = 'feats_' + fe
             if fe in vector_feats:
-                train_feat_df = extractor(train_feat_df, vec_model)
+                train_feat_df = extractor(train_feat_df, feat_name, vec_model)
             else:
-                train_feat_df = extractor(train_feat_df)
+                train_feat_df = extractor(train_feat_df, feat_name)
         if debug:
             print('Saving train feat df...')
         train_feat_df.to_csv(train_filename)
@@ -312,10 +338,11 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         train_feat_df = train_df.copy()
         for fe in features:
             extractor = fe_map[fe]
+            feat_name = 'feats_' + fe
             if fe in vector_feats:
-                extra_train_feat_df = extractor(train_feat_df, vec_model)
+                extra_train_feat_df = extractor(train_feat_df, feat_name, vec_model)
             else:
-                extra_train_feat_df = extractor(train_feat_df)
+                extra_train_feat_df = extractor(train_feat_df, feat_name)
 
     # Load test features
     if os.path.exists(test_filename):
@@ -326,10 +353,11 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
         test_feat_df = test_df.copy()
         for fe in features:
             extractor = fe_map[fe]
+            feat_name = 'feats_' + fe
             if fe in vector_feats:
-                test_feat_df = extractor(test_feat_df, vec_model)
+                test_feat_df = extractor(test_feat_df, feat_name, vec_model)
             else:
-                test_feat_df = extractor(test_feat_df)
+                test_feat_df = extractor(test_feat_df, feat_name)
         if debug:
             print('Saving test feat df...')
         test_feat_df.to_csv(test_filename)
@@ -362,8 +390,8 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
 
         # Encode features and labels
         m_time = time.time()
-        train_X = numpyer.to_feats(train_feat_df, use_numpy, doc_level=False)
-        test_X = numpyer.to_feats(test_feat_df, use_numpy, doc_level=False)
+        train_X = numpyer.to_feats(train_feat_df, use_numpy, doc_level=False, feat_names=features)
+        test_X = numpyer.to_feats(test_feat_df, use_numpy, doc_level=False, feat_names=features)
         train_Y, labelencoder = numpyer.to_labels(train_feat_df, labelname, encode=should_encode)
         test_Y, labelencoder = numpyer.to_labels(test_feat_df, labelname, labelencoder, encode=should_encode)
         if should_encode and not stage_name == 'ordering':
@@ -404,9 +432,11 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                 print('Wrote train time pairs to file')
             '''
             # Load extra time pairs for training
-            train_extra, labels_extra = data_util.load_time_pairs(stage_config['train_time_pairs'])
-            train_X = train_extra #+ train_X
-            train_Y = labelencoder.transform(labels_extra).tolist() #+ train_Y
+            if train_dataset == 'thyme':
+                train_extra, labels_extra = data_util.load_time_pairs(stage_config['train_time_pairs'])
+                print('train_extra:', len(train_extra), 'labels_extra:', len(labels_extra))
+                train_X = train_extra #+ train_X
+                train_Y = labelencoder.transform(labels_extra).tolist() #+ train_Y
 
         # Get rank labels for joint ordering/classification model
         if order_classify:
@@ -414,7 +444,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             train_Y2, rankencoder = numpyer.to_labels(train_feat_df, labelname2, encode=should_encode)
             test_Y2, rankencoder = numpyer.to_labels(test_feat_df, labelname2, rankencoder, encode=should_encode)
 
-        if modelname in ['cnn', 'matrixcnn', 'rnn', 'matrixrnn']:
+        if 'cnn' in modelname or modelname in ['rnn', 'matrixrnn']:
             num_classes = len(labelencoder.classes_)
             stage_params['num_classes'] = num_classes
             print('added num_classes to params')
@@ -482,7 +512,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                 else:
                     model.fit(train_X, train_Y)
                 # Save the model
-                if modelname in ['neural', 'neurallinear', 'cnn', 'ncrfpp', 'rnn', 'matrixcnn', 'matrixrnn', 'time_encoding', 'setorder']:
+                if modelname in ['neural', 'neurallinear', 'cnn', 'ncrfpp', 'rnn', 'matrixcnn', 'matrixrnn', 'time_encoding', 'setorder', 'jointcnn']:
                     print('Saving model...')
                     save(model, modelfile, 'torch')
 
@@ -508,13 +538,13 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                     # Save encodings to the dataframe
                     encodings = data_util.reorder_encodings(encodings, y_pred) # PRED order
                     #encodings = data_util.reorder_encodings(encodings, test_Y) # GOLD order
-                    test_feat_df = data_util.add_labels(test_feat_df, encodings, 'feats')
+                    test_feat_df = data_util.add_labels(test_feat_df, encodings, 'feats_timeline')
                     trainy_pred, train_encodings = model.predict(train_X, return_encodings=True)
                     train_encodings = data_util.reorder_encodings(train_encodings, train_Y)
-                    train_feat_df = data_util.add_labels(train_feat_df, train_encodings, 'feats')
+                    train_feat_df = data_util.add_labels(train_feat_df, train_encodings, 'feats_timeline')
                 else:
-                    # TEMP for THYME dataset
-                    if stage_name == 'encoding':
+                    # Don't test the time encoding model for THYME dataset because it takes too long
+                    if stage_name == 'encoding' and test_dataset == 'thyme':
                         y_pred = test_Y
                     else:
                         y_pred = model.predict(test_X)

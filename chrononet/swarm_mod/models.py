@@ -3,9 +3,9 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.modules.dropout import _DropoutNd
 
-from swarmlayer import SwarmLayer
+from .swarmlayer import SwarmLayer
 
-from set_transformer import InducedSetAttentionBlock, RFF
+from .set_transformer import InducedSetAttentionBlock, RFF
 
 nonlinearities = {}
 nonlinearities['relu']  = nn.ReLU()
@@ -25,14 +25,14 @@ class MaskedSequential(nn.Module):
 
     def forward(self, x, mask):
         for m in self.mods:
+            print('mod:', type(m))
             if type(m) in [type(nl) for nl in nonlinearities.values()] + \
                     [nn.Linear] + [Dropout2dChannelsLast] + [nn.LSTM]:
                 x = m(x)
             else:
                 x = m(x, mask)
+            print('mod:', type(m), 'output:', x)
         return x
-
-
 
 
 class SetLinear(nn.Module):
@@ -68,24 +68,14 @@ class SetLinear(nn.Module):
         return local + pool
 
 
-
-
-
-
 class Dropout2dChannelsLast(_DropoutNd):
 
-    def forward(self, x, input):
-
-        e = torch.ones_like((input[:,:1,:]))
+    def forward(self, input):
+        e = torch.ones_like((input[:, :1, :]))
         return input * F.dropout(e, self.p, self.training, self.inplace)
 
 
-
-
-
-
-def create_model( opt):
-
+def create_model(opt):
 
     nonlinearity = nonlinearities[opt.non_lin]
 
@@ -151,7 +141,6 @@ def create_model( opt):
 
         model = MaskedSequential(*layers)
 
-
     elif opt.type == 'SetTransformer':
 
         # uses opt. ...
@@ -211,11 +200,8 @@ def create_model( opt):
 
         model = LSTMModel(opt)
 
-
     else:
 
         raise ValueError("Unknown model type {}".format(opt.type))
-
-
 
     return model

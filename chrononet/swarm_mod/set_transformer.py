@@ -27,9 +27,6 @@ class Attention(nn.Module):
         Returns:
             a float tensor with shape [b, n, d'].
         """
-
-
-
         attention = torch.bmm(queries, keys.transpose(1, 2))
 
         if mask_query is not None:
@@ -40,12 +37,10 @@ class Attention(nn.Module):
             #print("key",attention.size(),mask_key.size())
             attention = attention + torch.log(mask_key.unsqueeze(1).float())
 
-
         attention = self.softmax(attention / self.temperature)
         # it has shape [b, n, m]
 
         return torch.bmm(attention, values)
-
 
 
 class MultiheadAttention(nn.Module):
@@ -90,6 +85,7 @@ class MultiheadAttention(nn.Module):
             a float tensor with shape [b, n, d].
         """
 
+        print('multiheadattention forward: queries:', queries.size(), 'keys:', keys.size(), 'values:', values.size())
         h = self.h
         b, n, d = queries.size()
         _, m, _ = keys.size()
@@ -112,7 +108,6 @@ class MultiheadAttention(nn.Module):
         if mask_key is not None:
             keys = keys * mask_key.unsqueeze(2).float()
             values = values * mask_key.unsqueeze(2).float()
-
 
         queries = queries.view(b, n, h, p)
         keys = keys.view(b, m, h, p)
@@ -140,9 +135,8 @@ class MultiheadAttention(nn.Module):
         if mask_query is not None:
             output = output * mask_query.unsqueeze(2).float()
 
-
+        print('st attention output:', output)
         return output
-
 
 
 class MultiheadAttentionBlock(nn.Module):
@@ -217,6 +211,7 @@ class InducedSetAttentionBlock(nn.Module):
         Returns:
             a float tensor with shape [b, n, d].
         """
+        print('induced set attention forward:', x.size())
         b = x.size()[0]
         i = self.inducing_points.unsqueeze(0).repeat([b, 1, 1])  # shape [b, m, d]
         h = self.mab1(i, x, mask_y=mask)  # shape [b, m, d]
@@ -248,4 +243,3 @@ class RFF(nn.Module):
             a float tensor with shape [b, n, d].
         """
         return self.layers(x)
-

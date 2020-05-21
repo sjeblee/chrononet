@@ -2,7 +2,7 @@
 
 # local imports
 from models.model_base import ModelBase, ModelFactory
-from .pytorch_classification import ElmoCNN, MatrixCNN, ElmoRNN, MatrixRNN, OrderRNN
+from .pytorch_classification import ElmoCNN, MatrixCNN, ElmoRNN, MatrixRNN, OrderRNN, JointCNN
 
 class CNNFactory(ModelFactory):
 
@@ -15,11 +15,34 @@ class CNNFactory(ModelFactory):
 class ElmoCNNModel(ModelBase):
     model = None
 
-    def __init__(self, input_size, num_classes, epochs=10, dropout=0.1, kernels=50, ksizes=5, pad_size=10):
+    def __init__(self, input_size, num_classes, epochs=10, dropout=0.1, kernels=50, ksizes=5, pad_size=10, reduce_size=0):
         self.input_size = int(input_size)
         self.epochs = int(epochs)
         self.model = ElmoCNN(self.input_size, int(num_classes), num_epochs=self.epochs, dropout_p=float(dropout), kernel_num=int(kernels),
-                             kernel_sizes=int(ksizes), pad_size=int(pad_size))
+                             kernel_sizes=int(ksizes), pad_size=int(pad_size), reduce_size=int(reduce_size))
+
+    def fit(self, X, Y):
+        self.model.fit(X, Y)
+
+    def predict(self, X):
+        return self.model.predict(X)
+
+class JointCNNFactory(ModelFactory):
+    requires_dim = True
+
+    def get_model(dim, params):
+        params['input_size'] = dim
+        return JointCNNModel(**params)
+
+class JointCNNModel(ModelBase):
+    model = None
+
+    def __init__(self, input_size, num_classes, epochs=10, dropout=0.1, kernels=50, ksizes=5, pad_size=10, word_pad_size=200, timeline_size=128, reduce_size=0, use_double=False):
+        self.input_size = int(input_size)
+        self.epochs = int(epochs)
+        doub = bool(str(use_double) == 'True')
+        self.model = JointCNN(self.input_size, int(num_classes), num_epochs=self.epochs, dropout_p=float(dropout), kernel_num=int(kernels),
+                              kernel_sizes=int(ksizes), pad_size=int(pad_size), word_pad_size=int(word_pad_size), timeline_size=int(timeline_size), reduce_size=int(reduce_size), use_double=doub)
 
     def fit(self, X, Y):
         self.model.fit(X, Y)

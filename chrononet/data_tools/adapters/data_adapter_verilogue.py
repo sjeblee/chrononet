@@ -108,7 +108,7 @@ OO = 'O'
 
 class DataAdapterVerilogue(DataAdapter):
 
-    def load_data(self, filename, drop_unlabeled=True):
+    def load_data(self, filename, drop_unlabeled=True, filter_missing_ranks=True):
         print('DataAdapterVerilogue.load_data', filename)
         df = pandas.DataFrame(columns=self.column_names)
         #df['diagnosis'] = ''
@@ -133,11 +133,17 @@ class DataAdapterVerilogue(DataAdapter):
             events = []
             for ann in annObj.annotations:
                 if ann.tag != 'TIMEX3':
-                    events.append(ann)
-                    if 'rank' in ann.features:
-                        ann_ranks.append(ann.features['rank'])
+                    if filter_missing_ranks:
+                        if 'rank' in ann.features:
+                            events.append(ann)
+                            ann_ranks.append(int(ann.features['rank']))
+                        # Else don't include the event
                     else:
-                        ann_ranks.append(None)
+                        events.append(ann)
+                        if 'rank' in ann.features:
+                            ann_ranks.append(int(ann.features['rank']))
+                        else:
+                            ann_ranks.append(None)
             row['events'] = events
             row['event_ranks'] = ann_ranks
             if self.debug: print(docid, 'event_ranks:', row['event_ranks'])
@@ -145,7 +151,7 @@ class DataAdapterVerilogue(DataAdapter):
             # Get utterances
             turns = transcripts.find("turns")
             #utts = turns.xpath("//utterance")
-            row['text'] = etree.tostring(turns, encoding='utf8')
+            row['text'] = etree.tostring(turns, encoding='utf8').decode('utf8')
 
             # No diagnosis yet for THYME
             row['diagnosis'] = ''
@@ -177,7 +183,7 @@ class DataAdapterVerilogue(DataAdapter):
             #annObj = AnnotationSaveObject()
             #annObj.fromObj(json.loads(ann))
             if self.debug: print('loaded annotations:', len(ann))
-        narr_ref = etree.fromstring(narr.decode('utf8')) # Load utterances
+        narr_ref = etree.fromstring(narr) # Load utterances
         utt_map = {}
         for entry in narr_ref:
             #utt = etree.fromstring(entry)
@@ -362,3 +368,41 @@ class DataAdapterVerilogue(DataAdapter):
             order_df = order_df.append(new_row, ignore_index=True)
 
         return order_df
+
+    def add_ranks(self, xmltree, df, record_name='record_id'):
+        for child in xmltree.getroot():
+            docid = child.find(record_name).text
+            print(docid, 'write_output', df.loc[df['docid'] == docid].to_string())
+            row = df.loc[df['docid'] == docid].iloc[0] # There should only be one row if this is a doc-level df
+            # Get the events and ranks
+            events = row['events']
+            event_ranks = row['event_ranks']
+            if type(events) == str:
+                event_list = []
+                events = etree.fromstring(events)
+                for event_child in events:
+                    event_list.append(event_child)
+                    #print(docid, 'event before:', etree.tostring(event_child))
+                events = event_list
+                #events = ast.literal_eval(events)
+            if type(event_ranks) == str:
+                event_ranks = ast.literal_eval(event_ranks)
+            #print('events:', len(events), 'ranks:', len(event_ranks))
+            assert(len(events) == len(event_ranks))
+            rank_event_pairs = list(zip(event_ranks, events))
+
+            # Sort the events by rank
+            sorted_event_pairs = sorted(rank_event_pairs, key=lambda x: x[0])
+            #eventlist_elem = etree.SubElement(child, 'event_list')
+            for event_pair in sorted_event_pairs:
+                #event = etree.fromstring(event_pair[1])
+                event = event_pair[1]
+                rank_val = event_pair[0]
+                event_rank = None
+                if 'rank' in event.features:
+                    event_rank = event.features['rank']
+                print(docid, 'true:', event_rank, 'pred:', rank_val, 'event:', event.features['rawText'])
+                # TEMP: Just print the predicted values
+                #event.set('rank', str(rank_val))
+                #eventlist_elem.append(event)
+        return xmltree

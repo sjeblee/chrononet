@@ -13,10 +13,14 @@ from collections import Counter
 from torch import optim
 from torchtext.vocab import Vocab
 from transformers import BertModel, BertTokenizer
+from sklearn.preprocessing import LabelEncoder
 from sklearn.utils import shuffle
 
 #from models.loss_functions import Kendall_Tau_Loss
+from models.loss_functions import listMLE
 from swarm_mod.swarmlayer import SwarmLayer
+from swarm_mod.models import MaskedSequential, Dropout2dChannelsLast
+from swarm_mod.set_transformer import InducedSetAttentionBlock, RFF
 
 numpy.set_printoptions(threshold=numpy.inf)
 debug = True
@@ -426,9 +430,22 @@ class SetToSequence_encoder(nn.Module):
         #self.gru_c = nn.GRU(self.input_size, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).double()
 
         if self.use_swarm:
-            self.set_layer = SwarmLayer(hidden_size, hidden_size, hidden_size, n_iter=read_cycles, n_dim=1, dropout=0.1, pooling='MEAN', channel_first=True, cache=False).double()
+            n_layers = 1
+            n_heads = 4
+            n_ind_points = 16
+
+            #layers = [nn.Linear(self.hidden_size, self.hidden_size)]
+            layers = []
+            for _ in range(n_layers):
+                layers.append(InducedSetAttentionBlock(d=(self.encoding_size+self.time_encoding_size), m=n_ind_points, h=n_heads, first_rff=RFF(d=self.hidden_size), second_rff=RFF(d=self.hidden_size)))
+                if self.dropout>0.0:
+                    layers.append(Dropout2dChannelsLast(p=self.dropout))
+                #layers.append(nn.Linear(self.hidden_size, self.output_size))
+            self.set_layer = MaskedSequential(*layers).double()
+
+            #self.set_layer = SwarmLayer(hidden_size, hidden_size, hidden_size, n_iter=read_cycles, n_dim=1, dropout=0.1, pooling='MEAN', channel_first=True, cache=False).double()
         else:
-            self.gru1 = nn.GRUCell(self.hidden_size, self.hidden_size).double() # encoder
+            self.gru1 = nn.GRUCell((self.encoding_size+self.time_encoding_size), self.hidden_size).double() # encoder
 
         # Attention calculations
         self.bilinear = nn.Bilinear(self.hidden_size, self.hidden_size, 1).double()
@@ -470,7 +487,7 @@ class SetToSequence_encoder(nn.Module):
                 # Event encoding
                 if self.use_autoencoder:
                     #print('ae input tensor:', X)
-                    context_enc = self.autoencoder.encode([row]).squeeze()#.detach() # should be (1, encoding_dim)
+                    context_enc = self.autoencoder.encode([row]).double().squeeze()#.detach() # should be (1, encoding_dim)
                 else:
                     context_enc = self.embedder(row).squeeze()
                 to_concat.append(context_enc)
@@ -533,9 +550,15 @@ class SetToSequence_encoder(nn.Module):
         h_t = self.init_hidden()
 
         if self.use_swarm:
-            mem_input = mem_block.view(-1, self.hidden_size, 1)
+            # Swarm
+            #mem_input = mem_block.view(-1, self.hidden_size, 1)
+            #swarm_output = self.set_layer(mem_input)
+
+            # Set transformer
+            mem_input = mem_block.view(1, -1, self.hidden_size)
             print('swarm input:', mem_input.size())
-            swarm_output = self.set_layer(mem_input)
+            swarm_output = self.set_layer(mem_input, mask=None)
+
             print('swarm output:', swarm_output.size())
             mem_block = swarm_output.view(-1, self.hidden_size) # Replace the memory block with the swarm output
             h_t = mem_block[-1, :].view(1, -1) # Use the last timestep as the hidden state for the decoder???
@@ -1040,7 +1063,7 @@ class SetToSequenceGroup:
         Y: a list of training labels
         WARNING: Currently you can't use the encoding layer and use_prev_labels at the same time
     '''
-    def fit(self, X, Y, activation='relu', num_epochs=10, batch_size=1, loss_function='mse'):
+    def fit(self, X, Y, activation='relu', num_epochs=10, batch_size=1, loss_function='kldiv'):
         start = time.time()
 
         # Parameters
@@ -1050,8 +1073,8 @@ class SetToSequenceGroup:
         output_dim = self.decoder.output_size
         learning_rate = 0.01
         #group_learning_rate = 0.001
-        print_every = 100
-        teacher_forcing_ratio = 0.8
+        print_every = 10
+        teacher_forcing_ratio = 0.9
 
         print("hidden_size:", str(hidden_size), "dropout:", str(dropout), "epochs:", str(num_epochs))
         print("encoding size:", str(encoding_size))
@@ -1062,7 +1085,10 @@ class SetToSequenceGroup:
         #group_optimizer = optim.Adam(self.group.parameters(), lr=group_learning_rate)
 
         # Loss function
-        criterion = nn.KLDivLoss()
+        if loss_function == 'listmle':
+            criterion = listMLE
+        else:
+            criterion = nn.KLDivLoss()
         #criterion = nn.MSELoss()
         #criterion = nn.BCEWithLogitsLoss()
         #criterion = nn.MultiLabelSoftMarginLoss()
@@ -1083,8 +1109,8 @@ class SetToSequenceGroup:
         print("output_dim: ", str(output_dim))
 
         # Train the autoencoder
-        if self.encoder.use_autoencoder:
-            self.encoder.autoencoder.fit(X)
+        #if self.encoder.use_autoencoder:
+        #    self.encoder.autoencoder.fit(X)
 
         start_epoch = 0
 
@@ -1250,9 +1276,9 @@ class SetToSequenceGroup:
                 else:
                     target_tensor = target_probs[0].view(1, -1)
 
-                #print('target:', target_tensor)
+                print('target:', target_tensor)
                 #target_tensor = torch.log(target_tensor)
-                #print('output tensor:', output_tensor)
+                print('output tensor:', output_tensor)
                 #print('target smoothed:', target_tensor)
                 print('output:', output_tensor.size(), 'target:', target_tensor.size())
 
@@ -1397,7 +1423,7 @@ class SetToSequenceGroup:
 
                     xi_list = []
                     x_i = torch.zeros(self.hidden_size, dtype=torch.float64, device=tdevice)
-                    print('targets:', len(targets))
+                    print('targets:', len(targets), targets)
                     for ti in targets:
                         x_i = mem_block[ti]
                         xi_list.append(x_i)
@@ -1414,7 +1440,7 @@ class SetToSequenceGroup:
                 output_indices.reverse()
 
             output_ranks = indices_to_ranks(output_indices)
-            #print('output_ranks:', output_ranks)
+            print('output_ranks:', output_ranks)
             outputs.append(output_ranks)
             if not return_encodings:
                 del mem_block
@@ -1440,6 +1466,7 @@ class OrderGRU(nn.Module):
         #self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
         self.checkpoint_dir = checkpoint_dir
         self.embedder = Embedder(encoder_name, encoding_size)
+        self.ae_trained = False
 
         print('input use_ae:', use_autoencoder, type(use_autoencoder))
         self.use_autoencoder = use_autoencoder
@@ -1450,12 +1477,13 @@ class OrderGRU(nn.Module):
             # TEMP so we don't have to re-train the autoencoder
             if os.path.exists(ae_file):
                 self.autoencoder = torch.load(ae_file)
+                self.ae_trained = True
             else:
                 #self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
                 self.autoencoder = Autoencoder(input_size, encoding_size, use_double=False, autoencoder_file=ae_file, encoder_name=encoder_name)
         #else:
         #    self.gru0 = nn.GRU(input_size+1, int(encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
-        self.gru1 = nn.GRU(hidden_size, int(hidden_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
+        self.gru1 = nn.GRU((encoding_size+time_encoding_size), int(hidden_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
         #self.gru_time = nn.GRU(self.input_size+1, int(self.time_encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
         print('time encoder file:', encoder_file)
         self.time_encoder = torch.load(encoder_file).model #TimeEncoder(self.input_size, self.time_encoding_size, self.elmo)
@@ -1518,7 +1546,7 @@ class OrderGRU(nn.Module):
                     enc = self.autoencoder.encode([row]).squeeze()#.detach() # should be (1, encoding_dim)
                     #print('ae event encoding:', enc)
                 else:
-                    enc = self.embedder(row)
+                    enc = self.embedder(row).view(self.encoding_size)
                     #encoding, hn_e = self.gru0(uttX, hn_e)
                     #enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
 
@@ -1576,7 +1604,7 @@ class OrderGRU(nn.Module):
 
             conversation = torch.stack(encodings)
             print('conversation:', conversation.size())
-            conversation = conversation.view(1, -1, self.hidden_size) # Treat whole conversation as a batch
+            conversation = conversation.view(1, -1, (self.encoding_size+self.time_encoding_size)) # Treat whole conversation as a batch
             print('conversation resized:', conversation.size())
             output_batch, hn = self.gru1(conversation, hn)
             print('(mini) output_batch:', output_batch.size())
@@ -1604,7 +1632,10 @@ class OrderGRU(nn.Module):
 
             i = i + mini_batch
 
-        print('final out:', out1.size(), out1)
+        if out1 is None:
+            print('final out is None')
+        else:
+            print('final out:', out1.size(), out1)
         if is_test:
             del encodings
         return out1, output #conversation.detach()
@@ -1617,7 +1648,7 @@ class OrderGRU(nn.Module):
         Y: a list of training labels
         WARNING: Currently you can't use the encoding layer and use_prev_labels at the same time
     '''
-    def fit(self, X, Y, activation='relu', num_epochs=10, batch_size=1, loss_function='mse', X2=None):
+    def fit(self, X, Y, activation='relu', num_epochs=10, batch_size=1, loss_function='listmle', X2=None):
         start = time.time()
 
         # Parameters
@@ -1625,8 +1656,8 @@ class OrderGRU(nn.Module):
         encoding_size = self.encoding_size
         dropout = self.dropout
         output_dim = self.output_size
-        learning_rate = 0.01
-        print_every = 100
+        learning_rate = 0.005
+        print_every = 1
         #teacher_forcing_ratio = 0.9
 
         print("hidden_size:", str(hidden_size), "dropout:", str(dropout), "epochs:", str(num_epochs))
@@ -1649,8 +1680,9 @@ class OrderGRU(nn.Module):
 
         else: # Leave X and Y as lists
             num_examples = len(X)
-            if encoding_size > 0:
-                print("X 000:", str(type(X[0][0][0])), "Y 00:", str(type(Y[0][0])))
+            #if encoding_size > 0 and len(X[0][0]) > 0:
+            #    print("X 000:", str(type(X[0][0][0])), "Y 00:", str(type(Y[0][0])))
+
                 #input_dim = X[0][0][0].shape[0]
                 #output_dim = Y[0][0].shape[0]
             #else:
@@ -1675,6 +1707,8 @@ class OrderGRU(nn.Module):
             criterion = nn.MSELoss()
         elif loss_function == 'l1':
             criterion = nn.L1Loss()
+        elif loss_function == 'listmle':
+            criterion = listMLE
         else:
             print("WARNING: need to add loss function!")
 
@@ -1682,7 +1716,7 @@ class OrderGRU(nn.Module):
             self = self.to(tdevice)
 
         # Train the autoencoder
-        if self.use_autoencoder:
+        if self.use_autoencoder and not self.ae_trained:
             self.autoencoder.fit(X)
 
         start_epoch = 0
@@ -1735,64 +1769,67 @@ class OrderGRU(nn.Module):
                     else:
                         batchX2 = None
 
-                # Convert to tensors
-                #batchXnp = batchXnp.astype('float')
-                #    batchX = torch.cuda.FloatTensor(batchXnp)
-                batchYnp = batchYnp.astype('float')
-                batchY = torch.tensor(batchYnp, dtype=torch.float, device=tdevice)
-
-                #print("batchX size:", str(batchX.size()), "batchY size:", str(batchY.size()))
-                if debug: print("batchX[0]:", str(batchX[0]))
-                if debug: print("batchY size:", str(batchY.size()))
-
-                labels = batchY.view(batch_size, -1, output_dim)
-                max_length = labels.size(1)
-                if debug: print("max_length:", str(max_length))
-                #if debug: print("batchX:", str(batchX.size()), "batchY:", str(batchY.size()))
-
-                # Forward + Backward + Optimize
-                optimizer.zero_grad()  # zero the gradient buffer
-                loss = 0
-
-                if encoding_size > 0:
-                    outputs, _ = self(batchX, batchX2)
-                    #print('max_length:', max_length)
-                    outputs.squeeze(0)
-                    #outputs = outputs.view(max_length, -1)
-                    print('outputs:', outputs.size())
+                if len(batchX) == 0:
+                    print('WARNING: dropped empty training example')
                 else:
-                    print('ERROR: Encoding size is 0 and I dont know what to do')
-                    #outputs = self(samples).view(max_length, -1)
-                #if debug: print("outputs:", str(outputs.size()))
-                if loss_function == 'crossentropy':
-                    for b in range(batch_size):
-                        true_labels = torch.zeros(max_length).long()
-                        if use_cuda:
-                            true_labels = true_labels.cuda()
-                        print('true_labels size:', str(true_labels.size()))
-                        print('labels[b]', str(len(labels[b])))
-                        for y in range(len(labels[b])):
-                            true_label = labels[b][y].data
-                            #print("true_label:", str(true_label.size()))
-                            true_index = torch.max(true_label, 0)[1].long()
-                            #print("true_index", str(true_index.size()))
-                            true_labels[y] = true_index[0]
-                        true_var = true_labels
-                        print("true_var", str(true_var.size()))
-                        loss = criterion(outputs, true_var)
+                    # Convert to tensors
+                    #batchXnp = batchXnp.astype('float')
+                    #    batchX = torch.cuda.FloatTensor(batchXnp)
+                    batchYnp = batchYnp.astype('float')
+                    batchY = torch.tensor(batchYnp, dtype=torch.float, device=tdevice)
+
+                    #print("batchX size:", str(batchX.size()), "batchY size:", str(batchY.size()))
+                    if debug: print("batchX[0]:", str(batchX[0]))
+                    if debug: print("batchY size:", str(batchY.size()))
+
+                    labels = batchY.view(batch_size, -1, output_dim)
+                    max_length = labels.size(1)
+                    if debug: print("max_length:", str(max_length))
+                    #if debug: print("batchX:", str(batchX.size()), "batchY:", str(batchY.size()))
+
+                    # Forward + Backward + Optimize
+                    optimizer.zero_grad()  # zero the gradient buffer
+                    loss = 0
+
+                    if encoding_size > 0:
+                        outputs, _ = self(batchX, batchX2)
+                        #print('max_length:', max_length)
+                        outputs.squeeze(0)
+                        #outputs = outputs.view(max_length, -1)
+                        print('outputs:', outputs.size())
+                    else:
+                        print('ERROR: Encoding size is 0 and I dont know what to do')
+                        #outputs = self(samples).view(max_length, -1)
+                    #if debug: print("outputs:", str(outputs.size()))
+                    if loss_function == 'crossentropy':
+                        for b in range(batch_size):
+                            true_labels = torch.zeros(max_length).long()
+                            if use_cuda:
+                                true_labels = true_labels.cuda()
+                            print('true_labels size:', str(true_labels.size()))
+                            print('labels[b]', str(len(labels[b])))
+                            for y in range(len(labels[b])):
+                                true_label = labels[b][y].data
+                                #print("true_label:", str(true_label.size()))
+                                true_index = torch.max(true_label, 0)[1].long()
+                                #print("true_index", str(true_index.size()))
+                                true_labels[y] = true_index[0]
+                            true_var = true_labels
+                            print("true_var", str(true_var.size()))
+                            loss = criterion(outputs, true_var)
+                            loss.backward()
+                            optimizer.step()
+                    else:
+                        labels = labels.view(max_length, 1)
+
+                        loss = criterion(outputs, labels)
                         loss.backward()
                         optimizer.step()
-                else:
-                    labels = labels.view(max_length, 1)
 
-                    loss = criterion(outputs, labels)
-                    loss.backward()
-                    optimizer.step()
-
-                if (i) % print_every == 0:
-                    if debug: print('outputs:', outputs.size(), 'labels:', labels.size())
-                    if debug: print('outputs:', outputs, 'labels:', labels)
-                    print('Epoch [%d/%d], Loss: %.4f' %(epoch, num_epochs, loss.data.item()))
+                    if (i) % print_every == 0:
+                        if debug: print('outputs:', outputs.size(), 'labels:', labels.size())
+                        if debug: print('outputs:', outputs, 'labels:', labels)
+                        print('Epoch [%d/%d], Loss: %.4f' %(epoch, num_epochs, loss.data.item()))
                 i = i+batch_size
 
                 del batchX
@@ -1832,18 +1869,22 @@ class OrderGRU(nn.Module):
                 #if debug: print("test x_array:", str(x_array.shape))
                 samples = torch.tensor(x_array, dtype=torch.float, device=tdevice)
 
-            with torch.no_grad():
-                if X2 is not None:
-                    outputs = self(samples, x2_batch)
-                else:
-                    outputs, enc = self(samples, is_test=True)
-                    encodings.append(enc)
-            #print("test outputs:", str(outputs.size()))
-            num_items = outputs.size()[1]
-            predicted = outputs.view(num_items).tolist()
-            #_, predicted = torch.max(outputs.data, -1) # TODO: fix this
-            print('predicted:', predicted)
-            pred.append(predicted)
+            if len(samples) == 0:
+                pred.append([])
+                encodings.append(None)
+            else:
+                with torch.no_grad():
+                    if X2 is not None:
+                        outputs = self(samples, x2_batch)
+                    else:
+                        outputs, enc = self(samples, is_test=True)
+                        encodings.append(enc)
+                #print("test outputs:", str(outputs.size()))
+                num_items = outputs.size()[1]
+                predicted = outputs.view(num_items).tolist()
+                #_, predicted = torch.max(outputs.data, -1) # TODO: fix this
+                print('predicted:', predicted)
+                pred.append(predicted)
             del samples
 
             i = i+batch_size
@@ -2081,7 +2122,7 @@ class Autoencoder(nn.Module):
         #decoded_output = self.decoder(encoded_input)
         return encoded_input, emb
 
-    def fit(self, X, epochs=50):
+    def fit(self, X, epochs=30):
         start = time.time()
         learning_rate = 0.001
         #criterion = torch.nn.MSELoss()
@@ -2355,11 +2396,14 @@ class TimeEncoder(nn.Module):
         if use_cuda:
             self.elmo = self.elmo.cuda()
         self.gru = nn.GRU(self.input_size, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
-        self.linear = nn.Linear(self.encoding_size*2, self.output_size)
+        self.linear = nn.Linear((self.encoding_size+2)*2, self.output_size)
         self.softmax = nn.Softmax(dim=2)
+        self.labelencoder = LabelEncoder()
 
     def encode(self, timex):
-        #print('timex:', timex)
+        timetype = self.labelencoder.transform([timex[0]])
+        timex = timex[1:]
+        print('timex:', timetype, timex)
         character_ids = batch_to_ids(timex)
         if use_cuda:
             character_ids = character_ids.cuda()
@@ -2371,10 +2415,15 @@ class TimeEncoder(nn.Module):
         time_enc, _ = self.gru(time_emb)
         #time_enc = time_enc[:, -1, :].squeeze()
         time_enc = torch.mean(time_enc, dim=1).squeeze()
+
+        # Concat the time type
+        type_tensor = torch.tensor(timetype, dtype=torch.float, device=tdevice)
+        time_enc = torch.cat((time_enc, type_tensor, type_tensor), dim=0) # Add 2 so the results will be an even number
+
         return time_enc
 
     def forward(self, input):
-        #print('input:', input)
+        print('input:', input)
         encodings = []
         for row in input:
             time1 = self.encode(row[0])
@@ -2382,7 +2431,7 @@ class TimeEncoder(nn.Module):
             encoded_input = torch.cat((time1, time2), dim=0)
             encodings.append(encoded_input)
         encoded_batch = torch.stack(encodings, dim=0)
-        #print('encoded batch:', encoded_batch.size())
+        print('encoded batch:', encoded_batch.size())
         output = self.linear(encoded_batch)
         return output
 
@@ -2398,6 +2447,9 @@ class TimeEncoder(nn.Module):
         sample_size = 50000
         if num_examples > sample_size:
             num_examples = sample_size
+
+        labels = ['UNK', 'DATE', 'TIME', 'DATETIME', 'DURATION', 'SET']
+        self.labelencoder.fit(labels)
 
         if use_cuda:
             print('tdevice:', tdevice)
@@ -2433,7 +2485,7 @@ class TimeEncoder(nn.Module):
                 #if debug: print("time encoder outputs:", str(outputs.size()))
 
                 loss = criterion(outputs, batchY)
-                if debug: print('xent loss:', loss.item())
+                if debug: print('time encoder xent loss:', loss.item())
                 loss.backward()
                 optimizer.step()
                 i += batch_size
