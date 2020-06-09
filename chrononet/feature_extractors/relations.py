@@ -32,7 +32,7 @@ def extract_relations(df, target_df):
     return target_df
 
 def extract_time_pairs(df, feat_name='feats', verilogue=False):
-    #verilogue = True
+    verilogue = False
     print('extract_time_pairs')
     df[feat_name] = ''
     df['time_order'] = ''
@@ -69,8 +69,9 @@ def extract_time_pairs(df, feat_name='feats', verilogue=False):
             # TIMEX map
             for timex in tags.findall('TIMEX3'):
                 print(etree.tostring(timex).decode('utf8'), timex.attrib)
-                tid = str(timex.get('id'))
-                if tid is None:
+                if 'id' in timex.attrib:
+                    tid = str(timex.attrib['id'])
+                else:
                     tid = str(timex.attrib['tid'])
                 timex_map[tid] = timex
                 print('timex_map', tid)

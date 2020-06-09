@@ -209,6 +209,26 @@ def fix_xml_tags(text):
     return text
 
 
+def shuffle_input(x, y):
+    new_x = []
+    new_y = []
+    for n in range(len(x)):
+        #rank_map = {}
+        x_list = x[n]
+        y_list = y[n]
+        new_x_list = []
+        new_y_list = []
+        temp_list = list(zip(x_list, y_list))
+        shuffle(temp_list)
+        new_lists = [list(t) for t in zip(*temp_list)]
+        new_x_list = new_lists[0]
+        new_y_list = new_lists[1]
+        new_x.append(new_x_list)
+        new_y.append(new_y_list)
+        #print('Shuffle entry:', str(new_y_list))
+    return new_x, new_y
+
+
 ''' Shuffle events within the same rank value, produce one shuffled example for every in-order example
 '''
 def generate_permutations(ids, x, y):

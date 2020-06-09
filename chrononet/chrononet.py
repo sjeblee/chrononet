@@ -413,9 +413,11 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             print('time encoding trainX:', len(train_X))
 
             # Limit test data for speed
-            #if len(test_X) > 1000:
-            #    test_X = test_X[0:1000]
-            #    test_Y = test_Y[0:1000]
+            if test_dataset == 'thyme' and len(test_X) > 1000:
+                test_X = test_X[0:1000]
+                test_Y = test_Y[0:1000]
+                train_X = train_X[0:10000]
+                train_Y = train_Y[0:10000]
 
             # Save the time pairs to a file
             '''
@@ -432,17 +434,30 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                 print('Wrote train time pairs to file')
             '''
             # Load extra time pairs for training
+            '''
             if train_dataset == 'thyme':
                 train_extra, labels_extra = data_util.load_time_pairs(stage_config['train_time_pairs'])
                 print('train_extra:', len(train_extra), 'labels_extra:', len(labels_extra))
-                train_X = train_extra #+ train_X
-                train_Y = labelencoder.transform(labels_extra).tolist() #+ train_Y
+                if test_dataset == 'thyme':
+                    #labelencoder = LabelEncoder()
+                    #labelset = ['BEFORE', 'AFTER', 'OVERLAP']
+                    train_X = train_extra #+ train_X
+                    train_Y = labelencoder.transform(labels_extra).tolist() #+ train_Y
+                #train_X = train_extra #+ train_X
+                #train_Y = labelencoder.transform(labels_extra).tolist() #+ train_Y
+            '''
 
         # Get rank labels for joint ordering/classification model
         if order_classify:
             labelname2 = test_data_adapter.get_labelname('ordering')
             train_Y2, rankencoder = numpyer.to_labels(train_feat_df, labelname2, encode=should_encode)
             test_Y2, rankencoder = numpyer.to_labels(test_feat_df, labelname2, rankencoder, encode=should_encode)
+
+        # Shuffled input order for temporal ordering
+        if stage_name == 'ordering' and 'shuffle_input' in stage_config and stage_config['shuffle_input'] == 'True':
+            print('Shuffling input order...')
+            train_X, train_Y = data_util.shuffle_input(train_X, train_Y)
+            test_X, test_Y = data_util.shuffle_input(test_X, test_Y)
 
         if 'cnn' in modelname or modelname in ['rnn', 'matrixrnn']:
             num_classes = len(labelencoder.classes_)
@@ -517,12 +532,14 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                     save(model, modelfile, 'torch')
 
             # RUN MODE
-            '''
             # TEMP: load second model
+            '''
             if stage_name == 'ordering':
-                modelfile2 = '/u/sjeblee/research/data/thyme/chrono/order_test_gru_context_time/neurallinear.model'
+                modelfile2 = '/h/sjeblee/research/data/va/chrono/paper_orders2s_va/neural_attn_shuffled.model'
                 print('Loading pretrained model 2:', modelfile2)
                 model2 = load(modelfile2, 'torch')
+                train_X, train_Y = data_util.shuffle_input(train_X, train_Y)
+                test_X, test_Y = data_util.shuffle_input(test_X, test_Y)
                 y_pred2 = model2.predict(test_X)
             '''
 
@@ -653,7 +670,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             set_1 = model_results[metric_name][0]
             set_2 = model_results[metric_name][1]
             tval, pval = ttest_rel(set_1, set_2)
-            print('pval:', pval)
+            print('tval, pval:', tval, pval)
 
     return score_string, train_feat_df, test_feat_df, extra_train_df
 

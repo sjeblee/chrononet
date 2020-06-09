@@ -25,7 +25,7 @@ class SetOrderModel(ModelBase):
     output_size = 1
     #invert = False # True for VA, False for THYME
 
-    def __init__(self, input_size, encoding_size=16, time_encoding_size=8, hidden_size=40, dropout=0.1, encoder_file=None, read_cycles=48, group_thresh=0.01, sigma=1, epochs=15, invert=False, use_autoencoder=False, ae_file=None, checkpoint_dir=None):
+    def __init__(self, input_size, encoding_size=16, time_encoding_size=8, hidden_size=40, dropout=0.1, encoder_file=None, read_cycles=48, group_thresh=0.001, sigma=1, epochs=15, invert=False, use_autoencoder=False, ae_file=None, checkpoint_dir=None):
         self.input_size = int(input_size)+0 # Add 2 for the target phrase flag and polarity flag
         self.group_thresh = float(group_thresh)
         self.epochs = int(epochs)
@@ -40,7 +40,7 @@ class SetOrderModel(ModelBase):
     def fit(self, X, Y):
         self.model.fit(X, Y, num_epochs=self.epochs)
 
-    def predict(self, X, group_thresh=0.1, return_encodings=False):
+    def predict(self, X, group_thresh=0.001, return_encodings=False):
         if group_thresh is not None:
             self.model.group_thresh = group_thresh
         return self.model.predict(X, return_encodings=return_encodings)
@@ -58,6 +58,7 @@ class NeuralOrderModel(ModelBase):
     model = None
     input_size = 0
     output_size = 1
+    group_thresh = None
     #invert = False # True for VA, False for THYME
 
     def __init__(self, input_size, encoding_size=16, time_encoding_size=8, hidden_size=40, dropout=0.1, read_cycles=48, group_thresh=0.01, sigma=1, epochs=15, invert=False, encoder_file=None, use_autoencoder=False, ae_file=None, checkpoint_dir=None):
@@ -76,7 +77,7 @@ class NeuralOrderModel(ModelBase):
     def fit(self, X, Y):
         self.model.fit(X, Y, num_epochs=self.epochs)
 
-    def predict(self, X, group_thresh=0.001, return_encodings=False):
+    def predict(self, X, group_thresh=0.1, return_encodings=False):
         if group_thresh is not None:
             self.model.group_thresh = group_thresh
         return self.model.predict(X, return_encodings=return_encodings)

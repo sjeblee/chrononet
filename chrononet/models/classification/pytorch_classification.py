@@ -397,7 +397,7 @@ class MatrixCNN_module(nn.Module):
             if use_double:
                 self.convs.append(nn.Conv2d(Ci, self.Co, (kn+1, D)).double())
             else:
-                self.convs.append(nn.Conv2d(Ci, self.Co, (kn+1, D)))#.double())
+                self.convs.append(nn.Conv2d(Ci, self.Co, (kn+1, D)))
 
         if use_cuda:
             self = self.to(tdevice)
@@ -405,17 +405,21 @@ class MatrixCNN_module(nn.Module):
                 conv.to(tdevice)
 
     def conv_and_pool(self, x, conv):
-        x = F.relu(conv(x)).squeeze(3)  # (N, Co, W)
+        x = conv(x)
+        #print('conv x:', x.size())
+        x = F.relu(x).squeeze(3)  # (N, Co, W)
+        #print('conv_and_pool relu x:', x.size())
         x = F.max_pool1d(x, x.size(2)).squeeze(2)
+        #print('pool x:', x.size())
         return x
 
     def forward(self, x):
-        print('x input size:', x.size(), x)
+        #print('x input size:', x.size(), x)
         batch_size = len(x)
-        print('batch size:', batch_size, 'dim:', self.dim)
+        #print('batch size:', batch_size, 'dim:', self.dim)
         #X = x[0].view(batch_size, -1, self.dim) # (N, W, D)
         X = x.to(tdevice)
-        print('cnn_module X:', X.size())
+        #print('cnn_module X:', X.size())
 
         # Pad to 10 words
         if X.size(1) > self.pad_size:
@@ -425,13 +429,14 @@ class MatrixCNN_module(nn.Module):
             zero_vec = torch.zeros(X.size(0), pad, X.size(2), device=tdevice)#.double()
             if self.use_double:
                 zero_vec = zero_vec.double()
-            print('zero_vec:', zero_vec.size(), zero_vec.dtype)
+            #print('zero_vec:', zero_vec.size(), zero_vec.dtype)
             X = torch.cat((X, zero_vec), dim=1)
 
         x = X.unsqueeze(1)  # (N, Ci, W, D)]
-        print('x padded size:', x.size())
+        #print('x padded size:', x.size())
         x_list = []
         for conv in self.convs:
+            #print('starting conv:', conv.kernel_size)
             x_list.append(self.conv_and_pool(x, conv))
         x = torch.cat(x_list, 1)
         return x
