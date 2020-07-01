@@ -32,7 +32,7 @@ def extract_relations(df, target_df):
     return target_df
 
 def extract_time_pairs(df, feat_name='feats', verilogue=False):
-    verilogue = False
+    #verilogue = False
     print('extract_time_pairs')
     df[feat_name] = ''
     df['time_order'] = ''
@@ -49,8 +49,8 @@ def extract_time_pairs(df, feat_name='feats', verilogue=False):
         #text = row['text']
         #print('narr text:', text)
 
-        #if type(row['events']) is list:
-        if verilogue:
+        if type(row['events']) is list:
+            #if verilogue:
             print('found verilogue data')
             verilogue = True
             events = row['events']
@@ -104,25 +104,30 @@ def extract_time_pairs(df, feat_name='feats', verilogue=False):
                     print('WARNING: time_id not found:', time_id)
                 else:
                     timex = timex_map[time_id]
+                    time_type = 'UNK'
                     if verilogue:
                         time_text = timex.features['rawText']
+                        if 'timexType' in timex.features:
+                            time_type = timex.features['timexType']
+                            if time_type == '':
+                                time_type = 'UNK'
                     else:
                         time_text = timex.text
-                    time_type = 'UNK'
-                    if 'type' in timex.attrib:
-                        time_type = timex.attrib['type']
+                        if 'type' in timex.attrib:
+                            time_type = timex.attrib['type']
                     time_words = data_util.split_words(time_text)
 
                     # Get SIGNAL text
-                    signal_id = event.get('signalID')
-                    if signal_id is not None:
-                        signal = signal_map[signal_id.lower()]
-                        signal_text = signal.text
-                        signal_words = data_util.split_words(signal_text)
-                        #sflags = []
-                        #for sw in signal_words:
-                        #    sflags.append(0)
-                        time_words = signal_words + time_words # Add signal words to time phrase
+                    if not verilogue:
+                        signal_id = event.get('signalID')
+                        if signal_id is not None:
+                            signal = signal_map[signal_id.lower()]
+                            signal_text = signal.text
+                            signal_words = data_util.split_words(signal_text)
+                            #sflags = []
+                            #for sw in signal_words:
+                            #    sflags.append(0)
+                            time_words = signal_words + time_words # Add signal words to time phrase
 
                     # Add the time type
                     time_words = [time_type] + time_words # Append the time type to the beginning of the list

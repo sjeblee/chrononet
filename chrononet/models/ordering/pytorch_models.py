@@ -318,7 +318,7 @@ class GRU_GRU(nn.Module):
                         true_var = true_labels
                         print("true_var", str(true_var.size()))
                         loss = criterion(outputs, true_var)
-                        loss.backward()
+                        loss.backward(retain_graph=True)
                         optimizer.step()
                 else:
                     labels = labels.view(max_length, 1)
@@ -1320,127 +1320,133 @@ class SetToSequenceGroup:
             #input_length = self.encoder.read_cycles
             #if debug: print("test seq_length:", str(seq_length))
 
-            with torch.no_grad():
-                # Run the encoder
-                mem_block, encoder_hidden = self.encoder(batchXnp)
-                if return_encodings:
-                    encodings.append(mem_block)
+            if seq_length == 0:
+                output_ranks = []
 
-                # Run the decoder
-                decoder_hidden = encoder_hidden
+            else:
+                with torch.no_grad():
+                    # Run the encoder
+                    mem_block, encoder_hidden = self.encoder(batchXnp)
+                    if return_encodings:
+                        encodings.append(mem_block)
 
-                # Initialize the prediction
-                x_i = torch.zeros(self.encoder.hidden_size, dtype=torch.float64, device=tdevice)
-                output_indices = []
-                done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
+                    # Run the decoder
+                    decoder_hidden = encoder_hidden
 
-                # Run until we've picked all the items
-                #current_rank = []
-                #x_list = []
+                    # Initialize the prediction
+                    x_i = torch.zeros(self.encoder.hidden_size, dtype=torch.float64, device=tdevice)
+                    output_indices = []
+                    done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
 
-                # Run until we've picked all the items
-                chosen = []
-                di = 0
-                #avg_gap = 0.0
-                while torch.max(done_mask).item() > 0.0 and (di < max_di):
-                    index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask)
+                    # Run until we've picked all the items
+                    #current_rank = []
+                    #x_list = []
 
-                    # Select multiple items at each timestep
-                    index = int(index.item())
+                    # Run until we've picked all the items
+                    chosen = []
+                    di = 0
+                    #avg_gap = 0.0
+                    while torch.max(done_mask).item() > 0.0 and (di < max_di):
+                        index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask)
 
-                    # Allow multiple events to be output at the same rank (prob threshold?)
-                    log_probs = log_probs * done_mask
-                    # Fix any nans
-                    for li in range(log_probs.size(0)):
-                        if math.isnan(log_probs[li]) or done_mask[li] == float('-inf'):
-                            log_probs[li] = float('-inf')
-                    print('test di:', di, 'mask:', done_mask)
-                    print('log_probs:', log_probs)
-                    max_tensor, index_tensor = torch.max(log_probs, dim=0)
-                    #target_index = int(index_tensor.item())
-                    max_prob = max_tensor.item()
-                    #print('max_prob:', max_prob)
-                    targets = []
-                    n = float(log_probs.size(0))
-                    #print('n:', n)
+                        # Select multiple items at each timestep
+                        index = int(index.item())
 
-                    # Elastic probability threshold
-                    '''
-                    if di == 0:
-                        if math.isinf(max_prob):
-                            avg_gap = 0.0
-                        else:
-                            probs2 = log_probs.tolist()
-                            sorted_probs = []
-                            for prob in probs2:
-                                if not math.isinf(prob): # Ignore -inf values
-                                    sorted_probs.append(prob)
+                        # Allow multiple events to be output at the same rank (prob threshold?)
+                        log_probs = log_probs * done_mask
+                        # Fix any nans
+                        for li in range(log_probs.size(0)):
+                            if math.isnan(log_probs[li]) or done_mask[li] == float('-inf'):
+                                log_probs[li] = float('-inf')
+                        print('test di:', di, 'mask:', done_mask)
+                        print('log_probs:', log_probs)
+                        max_tensor, index_tensor = torch.max(log_probs, dim=0)
+                        #target_index = int(index_tensor.item())
+                        max_prob = max_tensor.item()
+                        #print('max_prob:', max_prob)
+                        targets = []
+                        n = float(log_probs.size(0))
+                        #print('n:', n)
 
-                            # Remove outliers
-                            elements = numpy.array(sorted_probs)
-                            prob_mean = numpy.mean(elements, axis=0)
-                            prob_sd = numpy.std(elements, axis=0)
-                            sorted_probs = [x for x in sorted_probs if (x > prob_mean - 1 * prob_sd)]
-                            sorted_probs = [x for x in sorted_probs if (x < prob_mean + 1 * prob_sd)]
-
-                            if len(sorted_probs) < 2: # Make sure there are at least 2 probs left
+                        # Elastic probability threshold
+                        '''
+                        if di == 0:
+                            if math.isinf(max_prob):
                                 avg_gap = 0.0
                             else:
-                                sorted(sorted_probs, reverse=True)
-                                gaps = []
-                                for gindex in range(1, len(sorted_probs)):
-                                    gval = sorted_probs[gindex]
-                                    prev = sorted_probs[gindex-1]
-                                    diff = math.fabs(gval-prev)
-                                    gaps.append(diff)
-                                avg_gap = torch.mean(torch.tensor(gaps, dtype=torch.float64, device=tdevice)).item()/2.0
-                        #print('avg_gap:', avg_gap)
-                    '''
+                                probs2 = log_probs.tolist()
+                                sorted_probs = []
+                                for prob in probs2:
+                                    if not math.isinf(prob): # Ignore -inf values
+                                        sorted_probs.append(prob)
 
-                    for j in range(log_probs.size(0)):
-                        if done_mask[j] > 0.0:# or max_prob == 0.0:
-                            prob = log_probs[j]
-                            if (math.fabs(max_prob - prob) <= (self.group_thresh)) or math.isinf(max_prob):
-                                targets.append(j)
-                                print('choosing item', j, 'with prob', log_probs[j].item())
+                                # Remove outliers
+                                elements = numpy.array(sorted_probs)
+                                prob_mean = numpy.mean(elements, axis=0)
+                                prob_sd = numpy.std(elements, axis=0)
+                                sorted_probs = [x for x in sorted_probs if (x > prob_mean - 1 * prob_sd)]
+                                sorted_probs = [x for x in sorted_probs if (x < prob_mean + 1 * prob_sd)]
+
+                                if len(sorted_probs) < 2: # Make sure there are at least 2 probs left
+                                    avg_gap = 0.0
+                                else:
+                                    sorted(sorted_probs, reverse=True)
+                                    gaps = []
+                                    for gindex in range(1, len(sorted_probs)):
+                                        gval = sorted_probs[gindex]
+                                        prev = sorted_probs[gindex-1]
+                                        diff = math.fabs(gval-prev)
+                                        gaps.append(diff)
+                                    avg_gap = torch.mean(torch.tensor(gaps, dtype=torch.float64, device=tdevice)).item()/2.0
+                            #print('avg_gap:', avg_gap)
+                        '''
+
+                        for j in range(log_probs.size(0)):
+                            if done_mask[j] > 0.0:# or max_prob == 0.0:
+                                prob = log_probs[j]
+                                if (math.fabs(max_prob - prob) <= (self.group_thresh)) or math.isinf(max_prob):
+                                    targets.append(j)
+                                    print('choosing item', j, 'with prob', log_probs[j].item())
+                                    done_mask[j] = float('-inf')
+
+
+                        # For binary function
+                        '''
+                        for j in range(seq_length):
+                            ei_guess = torch.argmax(output_matrix[j]) # See if 0 (yes) or 1 (no) was predicted
+                            print('ei:', j, 'output:', output_matrix[j])
+                            if ei_guess == 1:
                                 done_mask[j] = float('-inf')
+                                if j not in chosen:
+                                    print('chooosing', j)
+                                    targets.append(j)
+                                    chosen.append(j)
+                        '''
+                        if len(targets) > 0:
+                            output_indices.append(targets)
 
+                        xi_list = []
+                        x_i = torch.zeros(self.hidden_size, dtype=torch.float64, device=tdevice)
+                        print('targets:', len(targets), targets)
+                        for ti in targets:
+                            x_i = mem_block[ti]
+                            xi_list.append(x_i)
+                        if len(xi_list) > 1:
+                            x_i = torch.mean(torch.stack(xi_list), dim=0)
+                        #print('test x_i:', x_i.size())
 
-                    # For binary function
-                    '''
-                    for j in range(seq_length):
-                        ei_guess = torch.argmax(output_matrix[j]) # See if 0 (yes) or 1 (no) was predicted
-                        print('ei:', j, 'output:', output_matrix[j])
-                        if ei_guess == 1:
-                            done_mask[j] = float('-inf')
-                            if j not in chosen:
-                                print('chooosing', j)
-                                targets.append(j)
-                                chosen.append(j)
-                    '''
-                    if len(targets) > 0:
-                        output_indices.append(targets)
+                        di += 1
+                    # End torch.no_grad
 
-                    xi_list = []
-                    x_i = torch.zeros(self.hidden_size, dtype=torch.float64, device=tdevice)
-                    print('targets:', len(targets), targets)
-                    for ti in targets:
-                        x_i = mem_block[ti]
-                        xi_list.append(x_i)
-                    if len(xi_list) > 1:
-                        x_i = torch.mean(torch.stack(xi_list), dim=0)
-                    #print('test x_i:', x_i.size())
+                #output_indices.append(current_rank)
+                # Un-invert the ranks
+                if self.invert_ranks:
+                    output_indices.reverse()
 
-                    di += 1
-                # End torch.no_grad
+                output_ranks = indices_to_ranks(output_indices)
+                print('output_ranks:', output_ranks)
+                # end if seq_length > 0
 
-            #output_indices.append(current_rank)
-            # Un-invert the ranks
-            if self.invert_ranks:
-                output_indices.reverse()
-
-            output_ranks = indices_to_ranks(output_indices)
-            print('output_ranks:', output_ranks)
             outputs.append(output_ranks)
             if not return_encodings:
                 del mem_block
@@ -1558,12 +1564,13 @@ class OrderGRU(nn.Module):
                     if time_words is None:
                         time_emb = torch.zeros(self.time_encoding_size, dtype=torch.float, device=tdevice)
                     else:
+                        #print('time_words:', time_words)
                         time_X = self.time_encoder.encode(time_words)
                         #time_char_ids = batch_to_ids([time_words]).to(tdevice)
                         #time_embeddings = self.elmo(time_char_ids)['elmo_representations']
                         #time_X = time_embeddings[0]
                         #time_X = time_X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
-                        print('time tensor:', time_X.size())
+                        #print('time tensor:', time_X.size())
                         time_emb = time_X.view(self.time_encoding_size)
 
                         # Add the flags

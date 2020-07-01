@@ -294,28 +294,32 @@ def load_xml_tags(ann, unwrap=True, decode=False):
 
 
 def reorder_encodings(encodings, orderings):
-    print('reorder encodings:', len(encodings), orderings)
+    print('reorder encodings:', len(encodings), len(orderings))
     assert(len(encodings) == len(orderings))
-    dim = encodings[0].size(-1)
+    dim = 0 # Get the dim later after we make sure it's not None
     new_encodings = []
     for x in range(len(encodings)):
-        enc = encodings[x].view(-1, dim)
-        order = orderings[x]
+        if encodings[x] is not None:
+            dim = encodings[x].size(-1)
+            #print('dim:', dim)
+            enc = encodings[x].view(-1, dim)
+            order = orderings[x]#.squeeze()
+            print('timeline for reordering:', enc.size(), 'ranks:', order)
 
-        indices = []
-        for y in range(len(order)):
-            indices.append((y, order[y]))
-        indices.sort(key=lambda k: k[1])
-        #shuffle(indices)
-        enc_list = []
-        for pair in indices:
-            rank = pair[1]
-            index = pair[0]
-            print('picking rank:', rank, 'at index:', index)
-            enc_list.append(enc[index])
-        new_enc = torch.stack(enc_list)
-        print('encodings size:', new_enc.size())
-        new_encodings.append(new_enc)
+            indices = []
+            for y in range(len(order)):
+                indices.append((y, order[y]))
+            indices.sort(key=lambda k: k[1])
+            #shuffle(indices)
+            enc_list = []
+            for pair in indices:
+                rank = pair[1]
+                index = pair[0]
+                print('picking rank:', rank, 'at index:', index)
+                enc_list.append(enc[index])
+            new_enc = torch.stack(enc_list).view(1, -1, dim)
+            print('encodings size:', new_enc.size())
+            new_encodings.append(new_enc)
 
     return new_encodings
 

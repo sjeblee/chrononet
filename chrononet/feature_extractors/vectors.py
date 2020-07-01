@@ -258,13 +258,22 @@ def elmo_event_vectors(df, feat_name='feats', flatten=False, use_iso_value=False
                     else:
                         timex = timex_map[time_id]
                         time_text = timex.features['rawText']
+                        time_type = 'UNK'
                         print('ver time text:', time_text)
+                        if 'timexType' in timex.features:
+                            time_type = timex.features['timexType']
+                            if time_type == '':
+                                time_type = 'UNK'
                         if use_bert:
                             time_words = bert_tokenizer.tokenize(time_text)
                         else:
                             time_words = data_util.split_words(time_text)
                         for tw in time_words:
                             tflags.append(1)
+                        # Add the time type
+                        tflags = [0] + tflags
+                        time_words = [time_type] + time_words # Append the time type to the beginning of the list
+                        print('vectors.elmo_event_vectors: extracted time_words:', time_words)
                 else:
                     time_id_string = None
             else:
@@ -322,6 +331,7 @@ def elmo_event_vectors(df, feat_name='feats', flatten=False, use_iso_value=False
                         # Add the time type
                         tflags = [0] + tflags
                         time_words = [time_type] + time_words # Append the time type to the beginning of the list
+                        print('vectors.elmo_event_vectors: extracted time_words:', time_words)
 
             #vec = data_util.split_words(event_text)
             vec, context, c_flags = context_words(prev, event_text, next, max_len=context_size, use_bert=use_bert)

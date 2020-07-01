@@ -1,6 +1,7 @@
 # @author sjeblee@cs.toronto.edu
 
 import numpy
+import os
 import time
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ from allennlp.modules.elmo import Elmo, batch_to_ids
 from torch import optim
 
 from models.ordering.pytorch_models import GRU_GRU, OrderGRU
+from data_tools import data_util
 
 numpy.set_printoptions(threshold=numpy.inf)
 debug = True
@@ -209,10 +211,17 @@ class ElmoCNN(nn.Module):
 
 class JointCNN(nn.Module):
 
-    def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=10, word_pad_size=200, reduce_size=0, timeline_size=128, use_double=False):
+    def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=10, word_pad_size=200, reduce_size=0, timeline_size=128, use_double=False, endtoend=True, checkpoint_dir=None):
         super(JointCNN, self).__init__()
-        #options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
-        #weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
+
+        self.checkpoint_dir = checkpoint_dir
+        print('self.checkpoint_dir:', self.checkpoint_dir)
+        self.endtoend = endtoend
+        if self.endtoend:
+            order_modelfile = os.path.join(self.checkpoint_dir, 'neurallinear.model')
+            print('loading ordering model from:', order_modelfile)
+            self.order_model = torch.load(order_modelfile)
+
         self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
         emb_input_size = 1024
         print('timeline_size:', timeline_size)
@@ -250,10 +259,23 @@ class JointCNN(nn.Module):
         batch_size = 1
         print('x:', str(x))
         x_words = x[0]
-        print('x_words:', len(x_words), x_words)
-        x_timeline = x[1].to(tdevice).unsqueeze(0)#.view(1, -1, self.timeline_size)
+
+        if self.endtoend:
+            ranks, encodings = self.order_model.model.forward(x[1])
+            num_ranks = ranks.size(1)
+            print('ranks:', num_ranks, ranks)
+            #ranks = torch.tensor(ranks, dtype=torch.float, device=tdevice).view(1, num_ranks)
+            print('timeline:', encodings.size(), 'ranks:', ranks.size())
+
+            # Re-order the timeline according to rank
+            #input = torch.cat((X, ranks), dim=2)
+            x_timeline = data_util.reorder_encodings([encodings], [ranks])[0]
+
+        else:
+            x_timeline = x[1].to(tdevice).view(1, -1, self.timeline_size)
         #print('timeline_size:', self.timeline_size)
         print('x_timeline:', x_timeline.size())
+        print('x_words:', len(x_words), x_words)
         num_words = len(x_words)
         character_ids = batch_to_ids([x_words]).to(tdevice)
         embeddings = self.elmo(character_ids)['elmo_representations']
@@ -336,7 +358,7 @@ class JointCNN(nn.Module):
                 logit = self(batchX)
 
                 loss_val = loss(logit, Ytensor)
-                #print('loss: ', loss_val.data.item())
+                print('class loss: ', loss_val.data.item())
                 loss_val.backward()
                 optimizer.step()
                 steps += 1
@@ -416,10 +438,10 @@ class MatrixCNN_module(nn.Module):
     def forward(self, x):
         #print('x input size:', x.size(), x)
         batch_size = len(x)
-        #print('batch size:', batch_size, 'dim:', self.dim)
-        #X = x[0].view(batch_size, -1, self.dim) # (N, W, D)
+        print('batch size:', batch_size, 'dim:', self.dim)
+        X = x[0].view(batch_size, -1, self.dim) # (N, W, D)
         X = x.to(tdevice)
-        #print('cnn_module X:', X.size())
+        print('cnn_module X:', X.size())
 
         # Pad to 10 words
         if X.size(1) > self.pad_size:
@@ -429,7 +451,7 @@ class MatrixCNN_module(nn.Module):
             zero_vec = torch.zeros(X.size(0), pad, X.size(2), device=tdevice)#.double()
             if self.use_double:
                 zero_vec = zero_vec.double()
-            #print('zero_vec:', zero_vec.size(), zero_vec.dtype)
+            print('zero_vec:', zero_vec.size(), zero_vec.dtype)
             X = torch.cat((X, zero_vec), dim=1)
 
         x = X.unsqueeze(1)  # (N, Ci, W, D)]

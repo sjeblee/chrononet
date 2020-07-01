@@ -210,20 +210,25 @@ def decode_all_labels(data, labenc=None):
     (i.e. for random or mention order)
 '''
 def dummy_function(df, feat_name='feats', doc_level=False):
-    #print('dummy_function')
+    print('dummy_function')
     df[feat_name] = '0'
     if not doc_level:
         for i, row in df.iterrows():
             fake_feats = []
-            event_list = etree.fromstring(row['events'])
-            if debug: print(row['docid'], 'dummy_function events:', type(event_list), etree.tostring(event_list))
-            if type(event_list) == str:
-                #event_list = eval(event_list)
-                event_list = ast.literal_eval(event_list)
-            if debug: print(row['docid'], 'dummy_function events len:', len(event_list))
-            for entry in event_list:
-                fake_feats.append(0)
-            df.at[i, 'feats'] = fake_feats
+            if row['events'] is not None:
+                print('events:', row['events'], type(row['events']))
+                if type(row['events']) is list and len(row['events']) == 0:
+                    print('event list is empty')
+                else:
+                    event_list = etree.fromstring(str(row['events']))
+                    if debug: print(row['docid'], 'dummy_function events:', type(event_list), etree.tostring(event_list))
+                    if type(event_list) == str:
+                        #event_list = eval(event_list)
+                        event_list = ast.literal_eval(event_list)
+                    if debug: print(row['docid'], 'dummy_function events len:', len(event_list))
+                    for entry in event_list:
+                        fake_feats.append(0)
+            df.at[i, feat_name] = fake_feats
             print('dummy_function:', row['docid'], 'feats:', len(fake_feats))
     return df
 
