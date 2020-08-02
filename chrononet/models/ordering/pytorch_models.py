@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from allennlp.modules.elmo import Elmo, batch_to_ids
+from captum.attr import IntegratedGradients
 from collections import Counter
 from torch import optim
 from torchtext.vocab import Vocab
@@ -338,6 +339,9 @@ class GRU_GRU(nn.Module):
         print("GRU_GRU training took", str(time.time()-start), "s")
 
     def predict(self, testX, X2=None, batch_size=1, keep_list=True, return_encodings=True):
+        # Attribution model
+        ig = IntegratedGradients(self)
+
         # Test the Model
         encodings = []
         print_every = 1000
@@ -363,7 +367,10 @@ class GRU_GRU(nn.Module):
             else:
                 x_array = numpy.asarray(testX[i:i+batch_size]).astype('float')
                 if debug: print("test x_array:", str(x_array.shape))
-                samples = torch.tensor(x_array, dtype=torch.float, device=tdevice)
+                samples = torch.tensor(x_array, dtype=torch.float, device=tdevice, requires_grad=True) # requires grad for attribution
+
+            baseline = torch.zeros(samples.size(), dtype=torch.float, device=tdevice) # baseline for attribution
+            print('baseline size:', baseline.size())
 
             with torch.no_grad():
                 if X2 is not None:
@@ -377,6 +384,12 @@ class GRU_GRU(nn.Module):
             #_, predicted = torch.max(outputs.data, -1) # TODO: fix this
             print('predicted:', predicted)
             pred.append(predicted)
+
+            # Get attributions
+            torch.set_grad_enabled(True)
+            attributions, approximation_error = ig.attribute(samples, baselines=baseline, method='gausslegendre', return_convergence_delta=True)
+            print('IG_ATT:', attributions)
+
             if not keep_list:
                 del sample_tensor
             i = i+batch_size
