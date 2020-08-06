@@ -1,5 +1,6 @@
 # @author sjeblee@cs.toronto.edu
 
+import matplotlib.pyplot as pyplot
 import numpy
 import os
 import time
@@ -8,6 +9,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from allennlp.modules.elmo import Elmo, batch_to_ids
+from captum.attr import IntegratedGradients
+from captum.attr import visualization as viz
+from matplotlib.colors import LinearSegmentedColormap
 from torch import optim
 
 from models.ordering.pytorch_models import GRU_GRU, OrderGRU
@@ -43,8 +47,7 @@ class ElmoCNN(nn.Module):
 
     def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=10, reduce_size=-1):
         super(ElmoCNN, self).__init__()
-        #options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
-        #weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
+
         self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
 
         D = input_size
@@ -436,11 +439,12 @@ class MatrixCNN_module(nn.Module):
         return x
 
     def forward(self, x):
-        #print('x input size:', x.size(), x)
-        batch_size = len(x)
+        print('x input:', x)
+        #batch_size = len(x)
+        batch_size = 1
         print('batch size:', batch_size, 'dim:', self.dim)
-        X = x[0].view(batch_size, -1, self.dim) # (N, W, D)
-        X = x.to(tdevice)
+        X = x.view(batch_size, -1, self.dim) # (N, W, D)
+        #X = X.to(tdevice)
         print('cnn_module X:', X.size())
 
         # Pad to 10 words
@@ -502,30 +506,6 @@ class MatrixCNN(nn.Module):
         return x
 
     def forward(self, x):
-        '''
-        print('x input size:', x[0].size(), x)
-        batch_size = len(x)
-        print('batch size:', batch_size)
-        #character_ids = batch_to_ids(x).to(tdevice)
-        #embeddings = self.elmo(character_ids)['elmo_representations']
-        #print('elmo embeddings:', embeddings[0].size())
-        X = x[0].view(batch_size, -1, self.dim) # (N, W, D)
-
-        # Pad to 10 words
-        if X.size(1) > self.pad_size:
-            X = X[:, 0:self.pad_size, :]
-        elif X.size(1) < self.pad_size:
-            pad = self.pad_size - X.size(1)
-            zero_vec = torch.zeros(X.size(0), pad, X.size(2), device=tdevice)#.double()
-            X = torch.cat((X, zero_vec), dim=1)
-
-        x = X.unsqueeze(1)  # (N, Ci, W, D)]
-        print('x pad size:', x.size())
-        x_list = []
-        for conv in self.convs:
-            x_list.append(self.conv_and_pool(x, conv))
-        x = torch.cat(x_list, 1)
-        '''
         cnn_output = self.cnn(x)
         drop = self.dropout(cnn_output)  # (N, len(Ks)*Co)
         logit = self.fc1(drop)  # (N, C)
@@ -591,7 +571,8 @@ class MatrixCNN(nn.Module):
                     Ytensor = Ytensor.to(tdevice)
 
                 optimizer.zero_grad()
-                logit = self(batchX)
+                # TEMP for attribution: can only be a batch size of 1
+                logit = self(batchX[0])
 
                 loss_val = loss(logit, Ytensor)
                 print('loss: ', loss_val.data.item())
@@ -613,13 +594,17 @@ class MatrixCNN(nn.Module):
         y_pred = [] # Original prediction if threshold is not in used for ill-defined.
         #new_y_pred = [] # class prediction if threshold for ill-difined is used.
 
+        # Attributions
+        ig = IntegratedGradients(self)
+        target_label = 0
+
         for x in range(len(testX)):
             input_row = testX[x]
 
             icd = None
             if icd is None:
                 with torch.no_grad():
-                    icd_var = self([input_row])
+                    icd_var = self(input_row)
                     # Softmax and log softmax values
                     icd_vec = self.logsoftmax(icd_var).squeeze()
                     #print('pred vector:', icd_vec.size(), icd_vec)
@@ -629,6 +614,22 @@ class MatrixCNN(nn.Module):
                     if x == 0:
                         print('cat:', cat)
                     #icd_code = cat
+
+                    # Attributions
+                    attributions_ig = ig.attribute(input_row, target=target_label, n_steps=200)
+                    print('attribution:')
+                    print(attributions_ig)
+
+                    default_cmap = LinearSegmentedColormap.from_list('custom blue', [(0, '#ffffff'),
+                                                  (0.25, '#000000'), (1, '#000000')], N=256)
+                    _ = viz.visualize_image_attr(numpy.transpose(attributions_ig.squeeze().cpu().detach().numpy(), (1, 2, 0)),
+                             numpy.transpose(input_row.squeeze().cpu().detach().numpy(), (1, 2, 0)),
+                             method='heat_map',
+                             cmap=default_cmap,
+                             show_colorbar=True,
+                             sign='positive',
+                             outlier_perc=1)
+                    pyplot.savefig('example.png')
 
             y_pred.append(cat)
         #print "Probabilities: " + str(probs)
