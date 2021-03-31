@@ -1,21 +1,25 @@
 # @author sjeblee@cs.toronto.edu
-
-import matplotlib.pyplot as pyplot
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import numpy
 import os
+import pickle
 import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from allennlp.modules.elmo import Elmo, batch_to_ids
-from captum.attr import IntegratedGradients
+from captum.attr import IntegratedGradients, LayerIntegratedGradients, TokenReferenceBase
 from captum.attr import visualization as viz
 from matplotlib.colors import LinearSegmentedColormap
 from torch import optim
 
 from models.ordering.pytorch_models import GRU_GRU, OrderGRU
 from data_tools import data_util
+
+plt.ioff()
 
 numpy.set_printoptions(threshold=numpy.inf)
 debug = True
@@ -24,8 +28,20 @@ use_cuda = torch.cuda.is_available()
 if use_cuda:
     tdevice = torch.device('cuda')
 
-options_file = "/h/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
-weight_file = "/h/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
+options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
+weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
+
+class ElmoWrapper(nn.Module):
+    def __init__(self):
+        super(ElmoWrapper, self).__init__()
+        self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
+
+    def forward(self, char_ids):
+        batch_size = 1
+        embeddings = self.elmo(char_ids)['elmo_representations']
+        #print('elmo embeddings:', embeddings[0].size())
+        X = embeddings[0].view(batch_size, -1, 1024) # (N, W, D)
+        return X
 
 ######################################################################
 # Convolutional Neural Network
@@ -45,10 +61,10 @@ weight_file = "/h/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xh
 #
 class ElmoCNN(nn.Module):
 
-    def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=10, reduce_size=-1):
+    def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=200, reduce_size=-1):
         super(ElmoCNN, self).__init__()
 
-        self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
+        self.elmo_wrapper = ElmoWrapper()
 
         D = input_size
         C = num_classes
@@ -77,13 +93,11 @@ class ElmoCNN(nn.Module):
         x = F.max_pool1d(x, x.size(2)).squeeze(2)
         return x
 
-    def forward(self, x):
-        #print('x:', str(x))
-        batch_size = len(x)
-        character_ids = batch_to_ids(x).to(tdevice)
-        embeddings = self.elmo(character_ids)['elmo_representations']
+    def forward(self, X):
+        # x should be the character_ids
+        #embeddings = self.elmo(character_ids)['elmo_representations']
         #print('elmo embeddings:', embeddings[0].size())
-        X = embeddings[0].view(batch_size, -1, 1024) # (N, W, D)
+        #X = embeddings[0].view(batch_size, -1, 1024) # (N, W, D)
 
         # Pad to 10 words
         if X.size(1) > self.pad_size:
@@ -167,7 +181,12 @@ class ElmoCNN(nn.Module):
                     Ytensor = Ytensor.to(tdevice)
 
                 optimizer.zero_grad()
-                logit = self(batchX)
+                character_ids = batch_to_ids(batchX).to(tdevice)
+                print('x:', str(batchX))
+                #batch_size = len(x)
+                #character_ids = batch_to_ids(x).to(tdevice)
+                emb = self.elmo_wrapper(character_ids)
+                logit = self(emb) # TEMP for attribution: only batch size of 1
 
                 loss_val = loss(logit, Ytensor)
                 #print('loss: ', loss_val.data.item())
@@ -188,13 +207,25 @@ class ElmoCNN(nn.Module):
     def predict(self, testX, testids=None, labelencoder=None, collapse=False, threshold=0.1, probfile=None):
         y_pred = [] # Original prediction if threshold is not in used for ill-defined.
         #new_y_pred = [] # class prediction if threshold for ill-difined is used.
+        attrs = []
+        dump_list = []
+
+        ig = IntegratedGradients(self)
+        target_label = 16 # target label should be the ill-defined class
+        #pad_indices = batch_to_ids([[' ']]).to(tdevice).squeeze()
+        #print('pad id:', pad_indices)
+        #PAD_IND = pad_indices#.item()
+        #token_reference = TokenReferenceBase(reference_token_idx=PAD_IND)
 
         for x in range(len(testX)):
             input_row = testX[x]
 
             icd = None
             if icd is None:
-                icd_var = self([input_row])
+                input_indices = batch_to_ids([input_row]).to(tdevice)#.unsqueeze(0)
+                print('input_indices size:', input_indices.size())
+                emb = self.elmo_wrapper(input_indices)
+                icd_var = self(emb)
                 # Softmax and log softmax values
                 icd_vec = self.logsoftmax(icd_var).squeeze()
                 #print('pred vector:', icd_vec.size(), icd_vec)
@@ -205,10 +236,33 @@ class ElmoCNN(nn.Module):
                     print('cat:', cat)
                 #icd_code = cat
 
+                # Attributions
+                # generate reference indices for each sample
+                seq_length = input_indices.size(1)
+                print('seq_length:', seq_length)
+                #reference_indices = token_reference.generate_reference(seq_length, device=tdevice).unsqueeze(0)
+                #print('reference indices size:', reference_indices.size())
+
+                # compute attributions and approximation delta using layer integrated gradients
+                #attributions_ig, delta = ig.attribute(input_indices, reference_indices, n_steps=500, return_convergence_delta=True)
+                attributions_ig, delta = ig.attribute(emb, target=target_label, n_steps=200, return_convergence_delta=True)
+                print('attribution for:', input_row)
+                print(attributions_ig.size())
+                #attrs.append(attributions_ig)
+                #attributions_avg = torch.mean(attributions_ig.squeeze(), dim=1)
+                dump_item = (attributions_ig.cpu(), input_row, cat, cat, 0, delta.cpu())
+                print('dump_item', dump_item)
+                dump_list.append(dump_item)
+
             y_pred.append(cat)
+            attrs.append(attributions_ig)
         #print "Probabilities: " + str(probs)
 
-        return y_pred  # Uncomment this line if threshold is not in used.
+        filename = '/u/sjeblee/research/data/va/chrono/classify_ig_elmo_full_attrs.pkl'
+        file = open(filename, 'wb')
+        pickle.dump(dump_list, file)
+        file.close()
+        return y_pred, attrs  # Uncomment this line if threshold is not in used.
         #return new_y_pred  # Comment this line out if threshold is not in used.
 
 
@@ -620,16 +674,19 @@ class MatrixCNN(nn.Module):
                     print('attribution:')
                     print(attributions_ig)
 
+                    '''
                     default_cmap = LinearSegmentedColormap.from_list('custom blue', [(0, '#ffffff'),
                                                   (0.25, '#000000'), (1, '#000000')], N=256)
-                    _ = viz.visualize_image_attr(numpy.transpose(attributions_ig.squeeze().cpu().detach().numpy(), (1, 2, 0)),
-                             numpy.transpose(input_row.squeeze().cpu().detach().numpy(), (1, 2, 0)),
+                    fig = viz.visualize_image_attr(attributions_ig.squeeze().cpu().detach().numpy(),
+                             input_row.squeeze().cpu().detach().numpy(),
                              method='heat_map',
                              cmap=default_cmap,
                              show_colorbar=True,
                              sign='positive',
                              outlier_perc=1)
-                    pyplot.savefig('example.png')
+                    plt.savefig(os.path.join(os.getcwd(), 'example1.png'))
+                    plt.close(fig)
+                    '''
 
             y_pred.append(cat)
         #print "Probabilities: " + str(probs)

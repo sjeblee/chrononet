@@ -86,7 +86,7 @@ class DataAdapter:
             else:
                 diagnosis = ''
             if docid not in doc_map:
-                doc_map[docid] = {'docid': docid, 'seqid': 0, 'text': text, 'text_orig': orig_text, 'seq': [], 'seq_labels': [], 'diagnosis': diagnosis}
+                doc_map[docid] = {'docid': docid, 'seqid': 0, 'text': text, 'text_orig': orig_text, 'seq': [], 'seq_labels': [], 'diagnosis': diagnosis, 'keywords': row['keywords']}
             else:
                 doc_map[docid]['text'] += ' ' + text
             row_seq = row['seq']
@@ -201,6 +201,7 @@ class DataAdapter:
                 target_row['text'] = ' '.join(seq)
                 target_row['text_orig'] = row['text']
                 target_row['diagnosis'] = str(row['diagnosis'])
+                target_row['keywords'] = str(row['keywords'])
                 if self.debug:
                     print('adding feat row:', target_row['docid'], target_row['seqid'], target_row['text'], target_row['seq_labels'])
                 target_df = target_df.append(target_row, ignore_index=True)

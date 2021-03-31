@@ -15,7 +15,7 @@ class CNNFactory(ModelFactory):
 class ElmoCNNModel(ModelBase):
     model = None
 
-    def __init__(self, input_size, num_classes, epochs=10, dropout=0.1, kernels=50, ksizes=5, pad_size=10, reduce_size=0):
+    def __init__(self, input_size, num_classes, epochs=10, dropout=0.1, kernels=50, ksizes=5, pad_size=200, reduce_size=0):
         self.input_size = int(input_size)
         self.epochs = int(epochs)
         self.model = ElmoCNN(self.input_size, int(num_classes), num_epochs=self.epochs, dropout_p=float(dropout), kernel_num=int(kernels),

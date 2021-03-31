@@ -12,7 +12,7 @@ from data_tools import data_util
 
 class DataAdapterVA(DataAdapter):
 
-    def load_data(self, filename, drop_unlabeled=True):
+    def load_data(self, filename, drop_unlabeled=False):
         if self.debug: print('DataAdapterVA.load_data', filename)
         df = pandas.DataFrame(columns=self.column_names)
 
@@ -36,6 +36,12 @@ class DataAdapterVA(DataAdapter):
                 tag_narr = ''
                 event_elem = None
                 num_events = 0
+                kw_node = child.find('keywords_spell')
+                if kw_node is None:
+                    row['keywords'] = ''
+                    print('WARNING: no keywords found for', row['docid'])
+                else:
+                    row['keywords'] = child.find('keywords_spell').text
                 if tag_node is not None:
                     tag_narr = etree.tostring(tag_node, encoding='utf8').decode('utf8')
                     #print('tag_narr orig:', tag_narr)

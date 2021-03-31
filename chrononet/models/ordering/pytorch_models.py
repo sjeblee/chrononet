@@ -30,8 +30,8 @@ use_cuda = torch.cuda.is_available()
 #use_cuda = False
 if use_cuda:
     tdevice = torch.device('cuda')
-options_file = "/h/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
-weight_file = "/h/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
+options_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_options.json"
+weight_file = "/u/sjeblee/research/data/elmo/weights/elmo_2x4096_512_2048cnn_2xhighway_weights_PubMed_only.hdf5"
 #bert_file = "/h/sjeblee/research/data/biobert_large"
 bert_file = "monologg/biobert_v1.1_pubmed"
 #bert_file = "adamlin/NCBI_BERT_pubmed_mimic_uncased_large_transformers"
@@ -1509,17 +1509,15 @@ class OrderGRU(nn.Module):
         self.linear = nn.Linear(hidden_size, output_size)
         self.softmax = nn.Softmax(dim=2)
 
-    ''' Input is a list of lists of numpy arrays
-    '''
-    def forward(self, input, X2=None, is_test=False):
+    def encode(self, input, X2=None, is_test=False):
         # input expected as (events, words, embedding_dim)
         encodings = []
-        hn = None
-        hn_e = None
+
         index = 0
         #extra_size = 0
 
         # Mini-batching for memory saving
+        '''
         mini_batch = 16
         i = 0
         #if not (is_test and len(input) > mini_batch):
@@ -1533,124 +1531,161 @@ class OrderGRU(nn.Module):
             if end > len(input):
                 end = len(input)
             input_batch = input[i:i+mini_batch]
-            print('mini_batch:', i, 'to', i+mini_batch, 'input_batch:', len(input_batch), 'should be', mini_batch)
-            encodings = []
+        '''
+        input_batch = input
+        #print('mini_batch:', i, 'to', i+mini_batch, 'input_batch:', len(input_batch), 'should be', mini_batch)
+        encodings = []
 
-            for row in input_batch:
-                # ELMo embedding for each event (sequence of words)
-                context = row[0]
-                print('context:', context)
-                word_flags = row[1]
-                time_words = row[2]
-                tflags = row[3]
-                time_val = row[4]
-                #time_type = row[5]
-                to_concat = []
+        for row in input_batch:
+            # ELMo embedding for each event (sequence of words)
+            context = row[0]
+            print('context:', context)
+            word_flags = row[1]
+            time_words = row[2]
+            tflags = row[3]
+            time_val = row[4]
+            #time_type = row[5]
+            to_concat = []
 
-                # Event encoding
-                if self.use_autoencoder:
-                    '''
-                    character_ids = batch_to_ids([context]).to(tdevice)
-                    embeddings = self.elmo(character_ids)['elmo_representations']
-                    #print('elmo embeddings:', len(embeddings))
-                    X = embeddings[0].squeeze()
-                    print('input_size:', self.input_size, 'X:', X.size())
-                    uttX = X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
+            # Event encoding
+            if self.use_autoencoder:
+                '''
+                character_ids = batch_to_ids([context]).to(tdevice)
+                embeddings = self.elmo(character_ids)['elmo_representations']
+                #print('elmo embeddings:', len(embeddings))
+                X = embeddings[0].squeeze()
+                print('input_size:', self.input_size, 'X:', X.size())
+                uttX = X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
 
-                    # Append the target flags
-                    c_flags = torch.tensor(word_flags, dtype=torch.float, device=tdevice).view(1, -1, 1)
-                    #print('X:', uttX.size(), 'c_flags:', c_flags.size())
-                    uttX = torch.cat((uttX, c_flags), dim=2)
-                    '''
-                    enc = self.autoencoder.encode([row]).squeeze()#.detach() # should be (1, encoding_dim)
-                    #print('ae event encoding:', enc)
+                # Append the target flags
+                c_flags = torch.tensor(word_flags, dtype=torch.float, device=tdevice).view(1, -1, 1)
+                #print('X:', uttX.size(), 'c_flags:', c_flags.size())
+                uttX = torch.cat((uttX, c_flags), dim=2)
+                '''
+                enc = self.autoencoder.encode([row]).squeeze()#.detach() # should be (1, encoding_dim)
+                #print('ae event encoding:', enc)
+            else:
+                enc = self.embedder(row).view(self.encoding_size)
+                #encoding, hn_e = self.gru0(uttX, hn_e)
+                #enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
+
+            to_concat.append(enc)
+            if debug: print('enc:', str(enc.size()))
+
+            # Time phrase encoding
+            if self.time_encoding_size > 0:
+                if time_words is None:
+                    time_emb = torch.zeros(self.time_encoding_size, dtype=torch.float, device=tdevice)
                 else:
-                    enc = self.embedder(row).view(self.encoding_size)
-                    #encoding, hn_e = self.gru0(uttX, hn_e)
-                    #enc = encoding[:, -1, :].view(self.encoding_size) # Only keep the output of the last timestep
+                    #print('time_words:', time_words)
+                    time_X = self.time_encoder.encode(time_words)
+                    #time_char_ids = batch_to_ids([time_words]).to(tdevice)
+                    #time_embeddings = self.elmo(time_char_ids)['elmo_representations']
+                    #time_X = time_embeddings[0]
+                    #time_X = time_X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
+                    #print('time tensor:', time_X.size())
+                    time_emb = time_X.view(self.time_encoding_size)
 
-                to_concat.append(enc)
-                if debug: print('enc:', str(enc.size()))
+                    # Add the flags
+                    #print('tflags:', str(tflags), 'twords:', time_words)
+                    #t_flags = torch.tensor(tflags, dtype=torch.float, device=tdevice).view(1, -1, 1)
+                    #print('time X:', time_X.size(), 't_flags:', t_flags.size())
+                    #time_X = torch.cat((time_X, t_flags), dim=2)
 
-                # Time phrase encoding
-                if self.time_encoding_size > 0:
-                    if time_words is None:
-                        time_emb = torch.zeros(self.time_encoding_size, dtype=torch.float, device=tdevice)
-                    else:
-                        #print('time_words:', time_words)
-                        time_X = self.time_encoder.encode(time_words)
-                        #time_char_ids = batch_to_ids([time_words]).to(tdevice)
-                        #time_embeddings = self.elmo(time_char_ids)['elmo_representations']
-                        #time_X = time_embeddings[0]
-                        #time_X = time_X.view(1, -1, self.input_size) # should be (1, #words, input_dim)
-                        #print('time tensor:', time_X.size())
-                        time_emb = time_X.view(self.time_encoding_size)
+                    #time_encoding, hn_t = self.gru_time(time_X, hn_t) # should be (1, #words, encoding_dim)
+                    #time_emb = time_encoding[:, -1, :].view(self.time_encoding_size)
 
-                        # Add the flags
-                        #print('tflags:', str(tflags), 'twords:', time_words)
-                        #t_flags = torch.tensor(tflags, dtype=torch.float, device=tdevice).view(1, -1, 1)
-                        #print('time X:', time_X.size(), 't_flags:', t_flags.size())
-                        #time_X = torch.cat((time_X, t_flags), dim=2)
-
-                        #time_encoding, hn_t = self.gru_time(time_X, hn_t) # should be (1, #words, encoding_dim)
-                        #time_emb = time_encoding[:, -1, :].view(self.time_encoding_size)
-
-                    '''
-                    if time_val is None:
-                        time_enc = torch.zeros(2, dtype=torch.float64, device=tdevice)
-                    else:
-                        time_enc = torch.tensor(time_val, dtype=torch.float64, device=tdevice)
-
-                    # Concatenate the time val and embedding
-                    time_enc = torch.cat((time_emb, time_enc), dim=0)
-                    '''
-                    to_concat.append(time_emb)
-
-                # Structured features
-                #flag_tensor = torch.tensor(flags, dtype=torch.float64, device=tdevice)
-
-                # Concatenate the features
-                event_vector = torch.cat(to_concat, dim=0)
-
-                # Add other features
-                if X2 is not None:
-                    x2_np = numpy.asarray([X2[index]]).astype('float')
-                    x2_vec = torch.tensor(x2_np, dtype=torch.float, device=tdevice)
-                    if debug: print('x2:', x2_vec.size())
-                    #extra_size = x2_vec.size()[0]
-                    enc = torch.cat((enc, x2_vec), dim=0)
-                encodings.append(event_vector)
-                index += 1
-
-            conversation = torch.stack(encodings)
-            print('conversation:', conversation.size())
-            conversation = conversation.view(1, -1, (self.encoding_size+self.time_encoding_size)) # Treat whole conversation as a batch
-            print('conversation resized:', conversation.size())
-            output_batch, hn = self.gru1(conversation, hn)
-            print('(mini) output_batch:', output_batch.size())
-            out1_batch = self.linear(output_batch)
-            if output is None:
-                output = output_batch
-            else:
-                output = torch.cat((output, output_batch), dim=1)
-            if out1 is None:
-                out1 = out1_batch
-            else:
-                out1 = torch.cat((out1, out1_batch), dim=1)
-            print('output size so far:', output.size())
-            #out1 = self.softmax(self.linear(output))
-
-            if is_test:
-                encodings = []
-                del conversation
                 '''
-                if self.use_autoencoder:
-                    del X
-                    del embeddings
-                '''
-                torch.cuda.empty_cache()
+                if time_val is None:
+                    time_enc = torch.zeros(2, dtype=torch.float64, device=tdevice)
+                else:
+                    time_enc = torch.tensor(time_val, dtype=torch.float64, device=tdevice)
 
-            i = i + mini_batch
+                # Concatenate the time val and embedding
+                time_enc = torch.cat((time_emb, time_enc), dim=0)
+                '''
+                to_concat.append(time_emb)
+
+            # Structured features
+            #flag_tensor = torch.tensor(flags, dtype=torch.float64, device=tdevice)
+
+            # Concatenate the features
+            event_vector = torch.cat(to_concat, dim=0)
+
+            # Add other features
+            if X2 is not None:
+                x2_np = numpy.asarray([X2[index]]).astype('float')
+                x2_vec = torch.tensor(x2_np, dtype=torch.float, device=tdevice)
+                if debug: print('x2:', x2_vec.size())
+                #extra_size = x2_vec.size()[0]
+                enc = torch.cat((enc, x2_vec), dim=0)
+            encodings.append(event_vector)
+            index += 1
+
+        conversation = torch.stack(encodings)
+        print('conversation:', conversation.size())
+        conversation = conversation.view(1, -1, (self.encoding_size+self.time_encoding_size)) # Treat whole conversation as a batch
+        print('conversation resized:', conversation.size())
+        return conversation
+
+        # Convert to list of tensors for attr code
+        '''
+        conv_list = []
+        for z in range(conversation.size(0)):
+            conv_list.append(conversation[z])
+        return tuple(conv_list)
+        '''
+
+    ''' Input shape should be (batch, num events, dim)
+    '''
+    def forward(self, input):
+        X2 = None
+        is_test = False
+        output = None
+        out1 = None
+        hn = None
+        hn_e = None
+        print('input:', input.size(), 'is_test:', is_test)
+        conversation = input
+        #print('input[0]:', type(input[0]), 'is_test:', is_test)
+        '''
+        if type(input) is tuple:
+            if len(input) == 1 and type(input[0]) is tuple:
+                conversation = torch.stack(input[0], dim=0).view(1, -1, (self.encoding_size+self.time_encoding_size))
+            else:
+                conversation = torch.stack(input, dim=0).view(1, -1, (self.encoding_size+self.time_encoding_size))
+        elif type(input) == torch.Tensor:
+            conversation = input.view(1, -1, (self.encoding_size+self.time_encoding_size))
+        else:
+            print('ERROR: unknown input type:', type(input))
+        '''
+        print('forward conversation:', conversation.size())
+        output_batch, hn = self.gru1(conversation, hn)
+        print('(mini) output_batch:', output_batch.size())
+        out1_batch = self.linear(output_batch)
+        if output is None:
+            output = output_batch
+        else:
+            output = torch.cat((output, output_batch), dim=1)
+        if out1 is None:
+            out1 = out1_batch
+        else:
+            out1 = torch.cat((out1, out1_batch), dim=1)
+        print('output size so far:', output.size())
+        #out1 = self.softmax(self.linear(output))
+
+        if is_test:
+            encodings = []
+            del conversation
+            '''
+            if self.use_autoencoder:
+                del X
+                del embeddings
+            '''
+            torch.cuda.empty_cache()
+
+        #i = i + mini_batch
+        #out1 = out1.squeeze() # NEW
 
         if out1 is None:
             print('final out is None')
@@ -1658,6 +1693,10 @@ class OrderGRU(nn.Module):
             print('final out:', out1.size(), out1)
         if is_test:
             del encodings
+
+        #out_list = []
+        #for x in range(out1.size(0)):
+        #    out_list.append(out1[x])
         return out1, output #conversation.detach()
 
     def initHidden(self, N):
@@ -1812,7 +1851,7 @@ class OrderGRU(nn.Module):
                     loss = 0
 
                     if encoding_size > 0:
-                        outputs, _ = self(batchX, batchX2)
+                        outputs, _ = self(self.encode(batchX)) # TEMP: no X2
                         #print('max_length:', max_length)
                         outputs.squeeze(0)
                         #outputs = outputs.view(max_length, -1)
@@ -1862,6 +1901,8 @@ class OrderGRU(nn.Module):
         print("GRU_GRU training took", str(time.time()-start), "s")
 
     def predict(self, testX, X2=None, batch_size=1, keep_list=True, return_encodings=False):
+        #ig = IntegratedGradients(self)
+
         # Test the Model
         encodings = []
         print_every = 1
@@ -1887,25 +1928,39 @@ class OrderGRU(nn.Module):
             else:
                 x_array = numpy.asarray(testX[i:i+batch_size]).astype('float')
                 #if debug: print("test x_array:", str(x_array.shape))
-                samples = torch.tensor(x_array, dtype=torch.float, device=tdevice)
+                samples = torch.tensor(x_array, dtype=torch.float, device=tdevice, requires_grad=True)
 
             if len(samples) == 0:
                 pred.append([])
                 encodings.append(None)
             else:
-                with torch.no_grad():
-                    if X2 is not None:
-                        outputs = self(samples, x2_batch)
-                    else:
-                        outputs, enc = self(samples, is_test=True)
-                        encodings.append(enc)
+                #with torch.no_grad():
+                if X2 is not None:
+                    with torch.no_grad():
+                        outputs = self(self.encode(samples)) #, x2_batch)
+                else:
+                    representation = self.encode(samples, is_test=False)
+                    #baseline = torch.zeros(representation.size(), dtype=torch.float, device=tdevice)
+                    '''
+                    for row in representation:
+                        baseline.append(torch.zeros(row.size(), dtype=torch.float, device=tdevice)) # baseline for attribution
+                        print('baseline size:', baseline[-1].size())
+                    baseline = tuple(baseline)
+                    '''
+                    with torch.no_grad():
+                        outputs, enc = self(representation)
+                    encodings.append(enc)
+                    # Get attributions
+                    #torch.set_grad_enabled(True)
+                    #attributions, approximation_error = ig.attribute(representation, baselines=baseline, method='gausslegendre', return_convergence_delta=True)
+                    #print('attributions:', attributions)
                 #print("test outputs:", str(outputs.size()))
                 num_items = outputs.size()[1]
                 predicted = outputs.view(num_items).tolist()
-                #_, predicted = torch.max(outputs.data, -1) # TODO: fix this
                 print('predicted:', predicted)
                 pred.append(predicted)
-            del samples
+
+            del samples#, baseline
 
             i = i+batch_size
         if not return_encodings:

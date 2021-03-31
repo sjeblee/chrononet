@@ -98,7 +98,7 @@ def main():
     if train_df is None:
         train_df = train_data_adapter.load_data(trainfile)
     if test_df is None:
-        test_df = test_data_adapter.load_data(testfile, drop_unlabeled=should_eval)
+        test_df = test_data_adapter.load_data(testfile, drop_unlabeled=False) #should_eval
     if save_intermediate:
         if debug:
             print('Saving preprocessed df...')
@@ -559,6 +559,12 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                     trainy_pred, train_encodings = model.predict(train_X, return_encodings=True)
                     train_encodings = data_util.reorder_encodings(train_encodings, train_Y)
                     train_feat_df = data_util.add_labels(train_feat_df, train_encodings, 'feats_timeline')
+
+                elif modelname in ['cnn']:
+                    y_pred, attrs = model.predict(test_X)
+                    print('y_pred:', len(y_pred), 'attrs:', len(attrs))
+                    test_feat_df = data_util.add_labels(test_feat_df, attrs, 'attrs')
+                    eval_metrics.keyword_attr_similarity(test_feat_df, model.model.elmo_wrapper)
                 else:
                     # Don't test the time encoding model for THYME dataset because it takes too long
                     if stage_name == 'encoding' and test_dataset == 'thyme':
