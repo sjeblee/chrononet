@@ -60,10 +60,12 @@ def get_lists(filename, outfile, relation_set='exact'):
             dropped += 1
             position = e.position[1]
             print("XMLSyntaxError at ", e.position, str(e), data_util.stringify_children(node)[position-5:position+5])
-        if node is not None and list_node is None: # Skip records that already have a list
+        if node is not None: # and list_node is None: # Skip records that already have a list
             timeline = listify(node, relation_set)
             ids.append(rec_id)
             timelines.append(timeline)
+            if list_node is not None:
+                child.remove(list_node)
             timeline_node = etree.SubElement(child, list_name)
             timeline_to_xml(timeline, timeline_node)
             # Write the file after every record in case one of them fails
@@ -108,7 +110,7 @@ def listify(xml_node, relation_set='exact'):
             if debug: print_event(item)# etree.tostring(item.element))
 
     # Verify the timeline
-    verify_list(timeline, tlinks, event_map, timex_map, id_to_bin)
+    #verify_list(timeline, tlinks, event_map, timex_map, id_to_bin)
 
     return timeline
 

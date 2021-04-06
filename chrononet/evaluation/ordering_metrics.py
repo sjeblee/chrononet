@@ -18,23 +18,26 @@ debug = True
 def kendalls_tau(true_ranks, pred_ranks, avg=True):
     accuracies = []
     for n in range(len(true_ranks)):
-        pr = numpy.asarray(pred_ranks[n])
-        tr = true_ranks[n]
-        print('tau: true:', tr)
-        print('tau: pred:', pr)
-        assert(len(pr) == len(tr))
-        pval = None
-        if len(tr) == 0:
-            tau = 0
-        elif len(tr) == 1:
-            tau = 1
-        else:
-            tau, pval = scipy.stats.kendalltau(tr, pr, nan_policy='raise')
-            print('Kendalls tau: n=', n, 'tau:', tau, 'p-value:', pval)
-        if not numpy.isnan(tau):
-            accuracies.append(tau)
-        else:
-            print('WARNING: Tau score dropped because it was NaN')
+        if len(true_ranks[n]) > 0:
+            pr = numpy.asarray(pred_ranks[n])
+            tr = true_ranks[n]
+            print('tau: true:', tr)
+            print('tau: pred:', pr)
+            #assert(len(pr) == len(tr))
+            if len(tr) < len(pr): # TEMP: force them to be the same size
+                pr = pr[0:len(tr)]
+            pval = None
+            if len(tr) == 0:
+                tau = 0
+            elif len(tr) == 1:
+                tau = 1
+            else:
+                tau, pval = scipy.stats.kendalltau(tr, pr, nan_policy='raise')
+                print('Kendalls tau: n=', n, 'tau:', tau, 'p-value:', pval)
+            if not numpy.isnan(tau):
+                accuracies.append(tau)
+            else:
+                print('WARNING: tau score dropped because it was NaN')
     if avg:
         if len(accuracies) > 1:
             acc = numpy.average(numpy.asarray(accuracies))
@@ -83,9 +86,10 @@ def rank_mae(true_ranks, pred_ranks):
         num_samples = len(true_ranks[n])
         assert(num_samples == len(pred_ranks[n]))
         error_sum = 0
-        for x in range(num_samples):
-            error_sum += abs(true_n[x] - pred_n[x])
-        mae_scores.append(error_sum/float(num_samples))
+        if num_samples > 0:
+            for x in range(num_samples):
+                error_sum += abs(true_n[x] - pred_n[x])
+            mae_scores.append(error_sum/float(num_samples))
     return numpy.average(numpy.asarray(mae_scores))
 
 
@@ -104,10 +108,10 @@ def rank_mse(true_ranks, pred_ranks):
     scale_true = False
     pred_vals = [item for sublist in pred_ranks for item in sublist]
     true_vals = [item for sublist in true_ranks for item in sublist]
-    if max(pred_vals) > 1:
-        scale_pred = True
-    if max(true_vals) > 1:
-        scale_true = True
+    #if max(pred_vals) > 1 or min(pred_vals) < -1:
+    scale_pred = True
+    #if max(true_vals) > 1:
+    scale_true = True
 
     print('mse scaling: true_ranks:', scale_true, 'pred_ranks:', scale_pred)
 
@@ -123,37 +127,40 @@ def rank_mse(true_ranks, pred_ranks):
         else:
             pred_n = pred_ranks[n]
         num_samples = len(true_ranks[n])
-        assert(num_samples == len(pred_ranks[n]))
+        #assert(num_samples == len(pred_ranks[n]))
         error_sum = 0
-        for x in range(num_samples):
-            error_sum += (true_n[x] - pred_n[x]) ** 2
-        mse_scores.append(error_sum/float(num_samples))
+        if num_samples > 0:
+            for x in range(num_samples):
+                error_sum += (true_n[x] - pred_n[x]) ** 2
+            mse_scores.append(error_sum/float(num_samples))
     return numpy.average(numpy.asarray(mse_scores))
 
 
 ''' Calculate the pairwise accuracy of a listwise ranking
     Currently this is a macro average (every document has equal weight)
 '''
-def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.00001, avg=True):
+def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.01, avg=True):
+    print('poa calculation: eps:', eps)
     accuracies = []
     for n in range(len(true_ranks)):
-        pr = pred_ranks[n]
-        se, so = get_ordered_pairs(true_ranks[n])
-        num_pairs = len(so) + len(se)
-        so_correct = 0
-        se_correct = 0
-        if num_pairs == 0:
-            accuracy = 0
-            print('WARNING: no ranks for evaluation')
-        else:
-            for pair in so:
-                if pr[pair[0]] < pr[pair[1]]:
-                    so_correct += 1
-            for pair in se:
-                if math.fabs(pr[pair[0]] - pr[pair[1]]) <= eps:
-                    se_correct += 1
-            accuracy = (so_correct + se_correct)/float(num_pairs)
-        accuracies.append(accuracy)
+        if len(true_ranks[n]) > 0:
+            pr = pred_ranks[n]
+            se, so = get_ordered_pairs(true_ranks[n])
+            num_pairs = len(so) + len(se)
+            so_correct = 0
+            se_correct = 0
+            if num_pairs == 0:
+                accuracy = 0
+                print('WARNING: no ranks for evaluation')
+            else:
+                for pair in so:
+                    if pr[pair[0]] < pr[pair[1]]:
+                        so_correct += 1
+                for pair in se:
+                    if math.fabs(pr[pair[0]] - pr[pair[1]]) <= eps:
+                        se_correct += 1
+                accuracy = (so_correct + se_correct)/float(num_pairs)
+            accuracies.append(accuracy)
     if avg:
         if len(accuracies) > 1:
             acc = numpy.average(numpy.asarray(accuracies))
@@ -164,6 +171,7 @@ def rank_pairwise_accuracy(true_ranks, pred_ranks, eps=0.00001, avg=True):
         return accuracies
 
 def epr(true_ranks, pred_ranks):
+    print('EPR:', events_per_rank(pred_ranks))
     return (events_per_rank(true_ranks), events_per_rank(pred_ranks))
 
 def gpr(y_true, y_pred, ref_df):
@@ -198,6 +206,7 @@ def events_per_rank(labels, thresh=0.0):
         for key in rank_to_num.keys():
             epr.append(rank_to_num[key])
 
+    print('epr:', epr)
     avg_epr = numpy.average(numpy.asarray(epr))
     return avg_epr
 
@@ -256,12 +265,19 @@ def str_pair(event_pair):
 
 
 def scale_ranks(rank_list):
-    max_rank = max(rank_list)
-    if max_rank == 0:
+    if len(rank_list) == 0:
         return rank_list
+    max_rank = max(rank_list)
+    min_rank = min(rank_list)
+    if max_rank <= 1 and min_rank >= 0:
+        return rank_list
+    if min_rank < 0:
+        shift_val = -1*min_rank
+    else:
+        shift_val = min_rank
     new_ranks = []
     for rank in rank_list:
-        new_ranks.append(float(rank)/float(max_rank))
+        new_ranks.append((float(rank)+shift_val)/float(max_rank))
     return new_ranks
 
 

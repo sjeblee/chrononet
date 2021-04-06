@@ -12,8 +12,8 @@ def check_feats(feats, seq, labels):
         print('labels:', len(labels))
     assert(len(feats) == len(labels))
 
-def sent_features(df):
-    df['feats'] = ''
+def sent_features(df, feat_name='feats'):
+    df[feat_name] = ''
     for i, row in df.iterrows():
         seq_list = row['seq']
         label_list = row['seq_labels']
@@ -24,7 +24,7 @@ def sent_features(df):
         sent = list(zip(seq_list, label_list))
         feats = sent2features(sent)
         check_feats(feats, seq_list, label_list)
-        df.at[i, 'feats'] = feats
+        df.at[i, feat_name] = feats
         if debug:
             print('row', row['docid'], row['seqid'])
             print('syntactic features:', str(feats))
@@ -83,3 +83,10 @@ def word2features(sent, i):
         features['EOS'] = True
 
     return features
+
+def span_features(df, feat_name='feats'):
+    # TODO: extract span features
+    df[feat_name] = ''
+    for i, row in df.iterrows():
+        print('todo')
+    return df

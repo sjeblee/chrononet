@@ -14,6 +14,7 @@ import operator
 import pandas
 import re
 import subprocess
+import torch
 
 debug = True
 
@@ -23,9 +24,16 @@ debug = True
     # TODO
 
 def add_labels(df, labels, labelname):
+    print('add_labels:', len(labels))
     df[labelname] = ''
     for i, row in df.iterrows():
-        df.at[i, labelname] = labels[i]
+        #print('add_labels i=', i)
+        if i < len(labels):
+            #print('add_labels labelname:', labelname, labels[i])
+            df.at[i, labelname] = labels[i]
+        else:
+            print('WARNING, add_labels i out of range:', i)
+
     return df
 
 def add_time_ids(event_elem, tag_elem):
@@ -51,6 +59,29 @@ def add_time_ids(event_elem, tag_elem):
             tid_string = ','.join(time_ids)
             event.set('relatedToTime', tid_string)
     return event_elem
+
+
+''' (In progress)
+'''
+def add_thyme_labels(filename, outfile):
+    brain = []
+    colon = []
+    xmltree = etree.parse(filename)
+    root = xmltree.getroot()
+    for child in root:
+        idname = child.get('record_id').text.split('_')[0]
+        id = idname[2:]
+        if int(id) in brain:
+            label = 'brain_cancer'
+        elif int(id) in colon:
+            label = 'colon_cancer'
+        else:
+            print('WARNING: id not found:', id)
+            label = 'none'
+        labelnode = etree.SubElement(child, 'diagnosis')
+        labelnode.text = label
+    etree.write(outfile)
+
 
 def create_df(df):
     return pandas.DataFrame(columns=['ID'])
@@ -85,15 +116,15 @@ def extract_ranks(events, event_list=None, allow_empty=False):
 
     event_count = 0
     for event in elem:
-        print('child tag:', event.tag)
+        if debug: print('child tag:', event.tag)
         if event.tag == 'EVENT':
             event_count += 1
-            print('elem event:', etree.tostring(event))
+            #print('elem event:', etree.tostring(event))
             if event_list is None:
                 rank = event.get('rank')
             else:
                 eventid = event.get('eid')
-                print('looking up eid', eventid)
+                #print('looking up eid', eventid)
                 rank = event_map[eventid]
             if rank is None:
                 print('ERROR: no rank attribute found:', etree.tostring(event))
@@ -104,10 +135,10 @@ def extract_ranks(events, event_list=None, allow_empty=False):
 
             #if int(rank) == 0:
             #    print('WARNING: rank is 0:', etree.tostring(event))
-            ranks.append(int(rank))
+            ranks.append(float(rank))
             #if int(rank) == 0:
             #    print('WARNING: rank is 0:', etree.tostring(event))
-    print('events:', event_count, 'ranks:', len(ranks))
+    if debug: print('events:', event_count, 'ranks:', len(ranks))
     assert(len(ranks) == event_count)
     return ranks
 
@@ -178,6 +209,26 @@ def fix_xml_tags(text):
     return text
 
 
+def shuffle_input(x, y):
+    new_x = []
+    new_y = []
+    for n in range(len(x)):
+        #rank_map = {}
+        x_list = x[n]
+        y_list = y[n]
+        new_x_list = []
+        new_y_list = []
+        temp_list = list(zip(x_list, y_list))
+        shuffle(temp_list)
+        new_lists = [list(t) for t in zip(*temp_list)]
+        new_x_list = new_lists[0]
+        new_y_list = new_lists[1]
+        new_x.append(new_x_list)
+        new_y.append(new_y_list)
+        #print('Shuffle entry:', str(new_y_list))
+    return new_x, new_y
+
+
 ''' Shuffle events within the same rank value, produce one shuffled example for every in-order example
 '''
 def generate_permutations(ids, x, y):
@@ -213,9 +264,22 @@ def generate_permutations(ids, x, y):
     return new_ids, new_x, new_y
 
 
+def load_time_pairs(filename):
+    print('load time pairs:', filename)
+    time_df = pandas.read_csv(filename, header=None, index_col=False)
+    time_df.columns = ['time1', 'time2', 'order']
+    pairs = []
+    labels = []
+    for i, row in time_df.iterrows():
+        pairs.append((split_words(row['time1']), split_words(row['time2'])))
+        labels.append(row['order'])
+        #print('loaded time pair:', pairs[-1], labels[-1])
+    return pairs, labels
+
+
 def load_xml_tags(ann, unwrap=True, decode=False):
-    #print('load_xml_tags:', ann)
-    if decode:
+    if debug: print('load_xml_tags:', ann)
+    if decode or type(ann) is bytes:
         ann = ann.decode('utf8')
     if unwrap:
         ann_xml = etree.fromstring(ann)
@@ -227,6 +291,37 @@ def load_xml_tags(ann, unwrap=True, decode=False):
     #    print(ann_text[820:])
     ann_element = etree.fromstring("<root>" + ann_text + "</root>")
     return ann_element
+
+
+def reorder_encodings(encodings, orderings):
+    print('reorder encodings:', len(encodings), len(orderings))
+    assert(len(encodings) == len(orderings))
+    dim = 0 # Get the dim later after we make sure it's not None
+    new_encodings = []
+    for x in range(len(encodings)):
+        if encodings[x] is not None:
+            dim = encodings[x].size(-1)
+            #print('dim:', dim)
+            enc = encodings[x].view(-1, dim)
+            order = orderings[x]#.squeeze()
+            print('timeline for reordering:', enc.size(), 'ranks:', order)
+
+            indices = []
+            for y in range(len(order)):
+                indices.append((y, order[y]))
+            indices.sort(key=lambda k: k[1])
+            #shuffle(indices)
+            enc_list = []
+            for pair in indices:
+                rank = pair[1]
+                index = pair[0]
+                print('picking rank:', rank, 'at index:', index)
+                enc_list.append(enc[index])
+            new_enc = torch.stack(enc_list).view(1, -1, dim)
+            print('encodings size:', new_enc.size())
+            new_encodings.append(new_enc)
+
+    return new_encodings
 
 
 def score_majority_class(true_labs):

@@ -17,19 +17,40 @@ debug = True
     use_numpy: True if we should convert to a numpy array
     doc_level: True if features should aggregate features at the document level (NOT IMPLEMENTED)
 '''
-def to_feats(df, use_numpy=True, doc_level=False):
-    print('to_feats: use_numpy:', use_numpy, 'doc_level:', doc_level)
+def to_feats(df, use_numpy=True, doc_level=False, feat_names=None):
+    print('to_feats: use_numpy:', use_numpy, 'doc_level:', doc_level, 'feats:', feat_names)
     feats = []
-    for i, row in df.iterrows():
-        flist = row['feats']
-        if type(flist) is str:
-            flist = ast.literal_eval(flist)
+    feat_columns = []
 
-        feats.append(flist)
-        if debug:
-            print('to_feats: ', row['docid'], 'feats:', len(flist))
-            #if i == 0:
-            print('feats[0]:', type(flist[0]), flist[0])
+    # Get the names of the feature columns for the df
+    if feat_names is None:
+        feat_columns.append('feats')
+    else: # Handle multiple feature types
+        for fname in feat_names:
+            feat_columns.append('feats_' + fname)
+
+    # Load a list of all the features
+    for i, row in df.iterrows():
+        if len(feat_columns) > 1:
+            mini_feat_list = []
+        for featname in feat_columns:
+            flist = row[featname]
+            if type(flist) is str:
+                flist = ast.literal_eval(flist)
+
+            if len(feat_columns) > 1:
+                mini_feat_list.append(flist)
+            else:
+                feats.append(flist)
+            #if debug:
+            #    print('to_feats: ', row['docid'], 'feats:', flist)
+            if debug and i == 0:
+                print('feats:', flist)
+                #if len(flist) > 0:
+                #    print('feats[0]:', type(flist[0]), flist[0])
+        if len(feat_columns) > 1:
+            feats.append(mini_feat_list)
+
     if use_numpy:
         return numpy.asarray(feats).astype('float')
     else:
@@ -44,9 +65,9 @@ def to_labels(df, labelname, labelencoder=None, encode=True):
     # Extract the labels from the dataframe
     for i, row in df.iterrows():
         flist = row[labelname]
-        #if debug: print('flist:', type(flist), str(flist))
-        if type(flist) == str:
-            flist = ast.literal_eval(flist)
+        if debug: print('flist:', type(flist), str(flist))
+        #if type(flist) == str:
+        #    flist = ast.literal_eval(flist)
         if debug and i == 0:
             print('labels[0]:', flist)
         labels.append(flist)
@@ -56,25 +77,33 @@ def to_labels(df, labelname, labelencoder=None, encode=True):
         enc_labels = []
         for rank_list in labels:
             norm_ranks = []
-            if type(rank_list) == str:
-                rank_list = ast.literal_eval(rank_list)
-            min_rank = float(numpy.amin(numpy.asarray(rank_list), axis=None))
-            # Scale min rank to 0
-            if min_rank > 0:
-                rank_list_scaled = []
-                for rank in rank_list:
-                    rank_list_scaled.append(rank - min_rank)
-                rank_list = rank_list_scaled
-            if encode:
-                max_rank = float(numpy.amax(numpy.asarray(rank_list), axis=None))
-                if max_rank == 0:
-                    print('WARNING: max rank is 0')
-                    norm_ranks = rank_list # Don't normalize if they're all 0
-                else: # Normalize
-                    norm_ranks = []
+            if rank_list is not None and len(rank_list) > 0 and not rank_list == '[]':
+                if type(rank_list) == str:
+                    rank_list = ast.literal_eval(rank_list)
+                min_rank = float(numpy.nanmin(numpy.array(rank_list, dtype=numpy.float), axis=None))
+                # Scale min rank to 0
+                if min_rank is not numpy.nan and min_rank > 0:
+                    rank_list_scaled = []
                     for rank in rank_list:
-                        norm_ranks.append(float(rank)/max_rank)
-                    rank_list = norm_ranks
+                        if rank is None or rank is numpy.nan:
+                            rank_list_scaled.append(-1)
+                        else:
+                            rank_list_scaled.append(rank - min_rank)
+                    rank_list = rank_list_scaled
+                if encode:
+                    max_rank = float(numpy.nanmax(numpy.array(rank_list, dtype=numpy.float), axis=None))
+                    if max_rank == numpy.nan or max_rank == 0:
+                        print('WARNING: max rank is 0')
+                        norm_ranks = rank_list # Don't normalize if they're all 0
+                    else: # Normalize
+                        norm_ranks = []
+                        for rank in rank_list:
+                            if rank is None or rank == -1:
+                                norm_ranks.append(float(-1))
+                            else:
+                                norm_ranks.append(float(rank)/max_rank)
+                        rank_list = norm_ranks
+            print('normalized ranks', rank_list)
             enc_labels.append(numpy.asarray(rank_list))
         labels = enc_labels
 
@@ -82,13 +111,16 @@ def to_labels(df, labelname, labelencoder=None, encode=True):
     elif encode:
         if labelencoder is None:
             labelencoder = create_labelencoder(labels)
-        labels = df.apply(encode_labels(labels))
+        labels = encode_labels_plain(labels)
     if debug: print('to_labels:', labelname, 'encode:', encode, 'labels:', len(labels))
     return labels, labelencoder
+
 
 def create_labelencoder(data, num=0):
     global labelencoder, onehotencoder, num_labels
     if debug: print("create_labelencoder: data[0]: ", str(data[0]))
+    if type(data[0]) is list:
+        data = [j for sub in data for j in sub]
     labelencoder = LabelEncoder()
     labelencoder.fit(data)
     num_labels = len(labelencoder.classes_)
@@ -96,6 +128,20 @@ def create_labelencoder(data, num=0):
     #onehotencoder.fit(data2)
 
     return labelencoder
+
+
+def encode_labels_plain(data, labenc=None):
+    if labenc is None:
+        labenc = labelencoder
+    print('encode_labels_plain:', str(data))
+    if type(data[0]) is list:
+        new_lab = []
+        for item in data:
+            new_lab.append(labenc.transform(item))
+    else:
+        new_lab = labenc.transform(data)
+    #print('encoded labels:', new_lab)
+    return new_lab
 
 
 ''' Encodes labels as one-hot vectors (entire dataset: 2D array)
@@ -163,20 +209,33 @@ def decode_all_labels(data, labenc=None):
 ''' Put 0 features corresponding to the labels if no features are required for the model
     (i.e. for random or mention order)
 '''
-def dummy_function(df, doc_level=False):
-    #print('dummy_function')
-    df['feats'] = '0'
+def dummy_function(df, feat_name='feats', doc_level=False):
+    print('dummy_function')
+    df[feat_name] = '0'
     if not doc_level:
         for i, row in df.iterrows():
             fake_feats = []
-            event_list = etree.fromstring(row['events'])
-            if debug: print(row['docid'], 'dummy_function events:', type(event_list), etree.tostring(event_list))
-            if type(event_list) == str:
-                #event_list = eval(event_list)
-                event_list = ast.literal_eval(event_list)
-            if debug: print(row['docid'], 'dumm_function events len:', len(event_list))
-            for entry in event_list:
-                fake_feats.append(0)
-            df.at[i, 'feats'] = fake_feats
+            if row['events'] is not None:
+                print('events:', row['events'], type(row['events']))
+                if (type(row['events']) is list and len(row['events']) == 0) or (type(row['events']) is str and row['events'] == '[]'):
+                    print('event list is empty')
+                else:
+                    if type(row['events']) is list:
+                        event_list = row['events']
+                    else:
+                        event_list = etree.fromstring(str(row['events']))
+                    if debug: print(row['docid'], 'dummy_function events:', type(event_list))#, etree.tostring(event_list))
+                    if type(event_list) == str:
+                        #event_list = eval(event_list)
+                        event_list = ast.literal_eval(event_list)
+                    if debug: print(row['docid'], 'dummy_function events len:', len(event_list))
+                    for entry in event_list:
+                        fake_feats.append(0)
+            df.at[i, feat_name] = fake_feats
             print('dummy_function:', row['docid'], 'feats:', len(fake_feats))
+    return df
+
+def do_nothing(df, feat_name='feats', doc_level=False):
+    if feat_name not in df.columns:
+        df[feat_name] = '0'
     return df

@@ -12,7 +12,7 @@ from data_tools import data_util
 
 class DataAdapterThyme(DataAdapter):
 
-    def load_data(self, filename):
+    def load_data(self, filename, drop_unlabeled=True):
         print('DataAdapterThyme.load_data', filename)
         df = pandas.DataFrame(columns=self.column_names)
         #df['diagnosis'] = ''
@@ -38,11 +38,11 @@ class DataAdapterThyme(DataAdapter):
                         dct = child.text
             event_elem = data_util.add_time_ids(event_elem, elem)
             row['events'] = etree.tostring(event_elem).decode('utf8')
-            print(docid, 'event_list:', type(event_list))
+            if self.debug: print(docid, 'event_list:', type(event_list))
             if event_list is None:
                 print('WARNING: event_list not found:', row['docid'])
             row['event_ranks'] = data_util.extract_ranks(row['tags'], event_list)
-            print(docid, 'event_ranks:', row['event_ranks'])
+            if self.debug: print(docid, 'event_ranks:', row['event_ranks'])
             # No diagnosis yet for THYME
             row['diagnosis'] = ''
             row['dct'] = dct
