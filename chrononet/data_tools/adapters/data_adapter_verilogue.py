@@ -153,8 +153,13 @@ class DataAdapterVerilogue(DataAdapter):
             #utts = turns.xpath("//utterance")
             row['text'] = etree.tostring(turns, encoding='utf8').decode('utf8')
 
-            # No diagnosis yet for THYME
-            row['diagnosis'] = ''
+            # Diagnosis
+            diag_node = child.find('interactionType')
+            diag = 'none'
+            if diag_node is not None:
+                diag = diag_node.text.strip().lower()
+            # TODO: map diagnosis to category
+            row['diagnosis'] = str(diag)
             dct = ''
             row['dct'] = dct
             df = df.append(row, ignore_index=True)

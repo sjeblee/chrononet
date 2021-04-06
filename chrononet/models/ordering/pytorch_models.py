@@ -23,6 +23,7 @@ from swarm_mod.models import MaskedSequential, Dropout2dChannelsLast
 from swarm_mod.set_transformer import InducedSetAttentionBlock, RFF
 
 numpy.set_printoptions(threshold=numpy.inf)
+use_time_type = True
 debug = True
 tdevice = 'cpu'
 use_cuda = torch.cuda.is_available()
@@ -388,7 +389,7 @@ class GRU_GRU(nn.Module):
 # Set to Sequence model for temporal ordering ##############################
 
 class SetToSequence_encoder(nn.Module):
-    def __init__(self, input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, time_encoder_file=None, use_autoencoder=False, autoencoder_file=None, encoder_name='elmo', use_swarm=True):
+    def __init__(self, input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, time_encoder_file=None, use_autoencoder=False, autoencoder_file=None, encoder_name='elmo', use_swarm=False, checkpoint_dir=None):
         super(SetToSequence_encoder, self).__init__()
 
         self.use_time_encoder = False
@@ -415,7 +416,7 @@ class SetToSequence_encoder(nn.Module):
                 print('loading previously trained autoencoder')
                 self.autoencoder = torch.load(autoencoder_file)
             else:
-                self.autoencoder = Autoencoder(input_size, encoding_size, use_double=True, autoencoder_file=autoencoder_file, encoder_name=encoder_name)
+                self.autoencoder = Autoencoder(input_size, encoding_size, use_double=True, autoencoder_file=autoencoder_file, encoder_name=encoder_name, checkpoint_dir=checkpoint_dir)
         else:
             self.embedder = Embedder(encoder_name, encoding_size, use_double=True)
         #    self.gru0 = nn.GRU(self.input_size+1, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True).double()
@@ -1045,7 +1046,7 @@ class SetToSequenceGroup_transition(nn.Module):
 class SetToSequenceGroup:
 
     def __init__(self, input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p=0.1, read_cycles=50, group_thresh=None, invert_ranks=False, sig=1, time_encoder_file=None, use_autoencoder=False, autoencoder_file=None, checkpoint_dir=None):
-        self.encoder = SetToSequence_encoder(input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p, read_cycles, time_encoder_file, use_autoencoder=use_autoencoder, autoencoder_file=autoencoder_file)
+        self.encoder = SetToSequence_encoder(input_size, encoding_size, context_encoding_size, time_encoding_size, hidden_size, output_size, dropout_p, read_cycles, time_encoder_file, use_autoencoder=use_autoencoder, autoencoder_file=autoencoder_file, checkpoint_dir=checkpoint_dir)
         self.decoder = SetToSequenceGroup_decoder(hidden_size, output_size, dropout_p, group_thresh)
         self.group_thresh = group_thresh
         self.hidden_size = hidden_size
@@ -1101,7 +1102,7 @@ class SetToSequenceGroup:
             #self.group = self.group.to(tdevice)
 
         num_examples = len(X)
-        print("X 000:", str(type(X[0][0][0])), "Y 00:", str(type(Y[0][0])))
+        #print("X 000:", str(type(X[0][0][0])), "Y 00:", str(type(Y[0][0])))
         input_dim = self.encoder.input_size
         print("X list:", str(len(X)), "Y list:", str(len(Y)))
 
@@ -1109,8 +1110,8 @@ class SetToSequenceGroup:
         print("output_dim: ", str(output_dim))
 
         # Train the autoencoder
-        #if self.encoder.use_autoencoder:
-        #    self.encoder.autoencoder.fit(X)
+        if self.encoder.use_autoencoder:
+            self.encoder.autoencoder.fit(X)
 
         start_epoch = 0
 
@@ -1155,144 +1156,146 @@ class SetToSequenceGroup:
                 #group_optimizer.zero_grad()
                 loss = 0
 
-                # Run the encoder
-                mem_block, encoder_hidden = self.encoder(batchXnp)
+                if len(batchXnp) > 0:
 
-                # Run the decoder
-                decoder_hidden = encoder_hidden
-                #print('decoder hidden:', decoder_hidden.size())
-                use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+                    # Run the encoder
+                    mem_block, encoder_hidden = self.encoder(batchXnp)
 
-                # Initialize the prediction
-                x_i = torch.zeros(hidden_size, dtype=torch.float64, device=tdevice)
-                output_indices = []
-                output_probs = []
-                correct_ranks = labels.squeeze()
-                flatten = False
-                #if self.group_thresh is not None:
-                #    flatten = False
-                correct_indices = ranks_to_indices(correct_ranks.tolist(), flatten)
+                    # Run the decoder
+                    decoder_hidden = encoder_hidden
+                    #print('decoder hidden:', decoder_hidden.size())
+                    use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
 
-                # INVERT the ranks?
-                if self.invert_ranks:
-                    correct_indices.reverse()
+                    # Initialize the prediction
+                    x_i = torch.zeros(hidden_size, dtype=torch.float64, device=tdevice)
+                    output_indices = []
+                    output_probs = []
+                    correct_ranks = labels.squeeze()
+                    flatten = False
+                    #if self.group_thresh is not None:
+                    #    flatten = False
+                    correct_indices = ranks_to_indices(correct_ranks.tolist(), flatten)
 
-                num_timesteps = len(correct_indices)
-                print('num timesteps:', num_timesteps)
-                #if i==0: print('correct_indices:', correct_indices)
-                done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
-                current_rank = []
-                x_list = []
+                    # INVERT the ranks?
+                    if self.invert_ranks:
+                        correct_indices.reverse()
 
-                # Run until we've picked all the items
-                #di = 0
-                #while torch.max(done_mask).item() > 0.0:
-                output_probs = []
-                target_probs = []
-                for di in range(num_timesteps):
-                    print('di:', di)
-                    index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask, train=True)
-                    #print('di:', di, 'mask:', done_mask)
-                    output_probs.append(log_probs)
-                    #output_probs.append(output_matrix.view(1, -1, 2))
+                    num_timesteps = len(correct_indices)
+                    print('num timesteps:', num_timesteps)
+                    #if i==0: print('correct_indices:', correct_indices)
+                    done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
+                    current_rank = []
+                    x_list = []
 
-                    # Select multiple items at each timestep
-                    index = int(index.item())
-                    x_i = mem_block[index]
-                    # Teacher forcing for training
-                    if use_teacher_forcing:
-                        x_correct = mem_block[correct_indices[di]]
-                        x_i = x_correct
-                        for ei in correct_indices[di]:
-                            done_mask[ei] = float('-inf')
-                    '''
-                    else:
-                        x_i_list = []
-                        for ei in range(seq_length):
-                            print('output:', ei, output_matrix[ei])
-                            ei_guess = torch.argmax(output_matrix[ei]) # See if 0 (yes) or 1 (no) was predicted
-                            if ei_guess == 1:
-                                print('choosing', ei)
+                    # Run until we've picked all the items
+                    #di = 0
+                    #while torch.max(done_mask).item() > 0.0:
+                    output_probs = []
+                    target_probs = []
+                    for di in range(num_timesteps):
+                        print('di:', di)
+                        index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask, train=True)
+                        #print('di:', di, 'mask:', done_mask)
+                        output_probs.append(log_probs)
+                        #output_probs.append(output_matrix.view(1, -1, 2))
+
+                        # Select multiple items at each timestep
+                        index = int(index.item())
+                        x_i = mem_block[index]
+                        # Teacher forcing for training
+                        if use_teacher_forcing:
+                            x_correct = mem_block[correct_indices[di]]
+                            x_i = x_correct
+                            for ei in correct_indices[di]:
                                 done_mask[ei] = float('-inf')
-                                x_i_list.append(mem_block[ei])
-                        if len(x_i_list) == 0:
-                            x_i = torch.zeros(self.hidden_size, dtype=torch.float64, device=tdevice)
+                        '''
                         else:
-                            x_i = torch.stack(x_i_list, dim=0)
-                    '''
+                            x_i_list = []
+                            for ei in range(seq_length):
+                                print('output:', ei, output_matrix[ei])
+                                ei_guess = torch.argmax(output_matrix[ei]) # See if 0 (yes) or 1 (no) was predicted
+                                if ei_guess == 1:
+                                    print('choosing', ei)
+                                    done_mask[ei] = float('-inf')
+                                    x_i_list.append(mem_block[ei])
+                            if len(x_i_list) == 0:
+                                x_i = torch.zeros(self.hidden_size, dtype=torch.float64, device=tdevice)
+                            else:
+                                x_i = torch.stack(x_i_list, dim=0)
+                        '''
 
-                    # Average the chosen items to use as input to the decoder
-                    x_i = x_i.view(-1, hidden_size)
-                    if x_i.size(0) > 1:
-                        x_i = torch.mean(x_i, dim=0)
-                    #print('x_i:', x_i.size())
+                        # Average the chosen items to use as input to the decoder
+                        x_i = x_i.view(-1, hidden_size)
+                        if x_i.size(0) > 1:
+                            x_i = torch.mean(x_i, dim=0)
+                        #print('x_i:', x_i.size())
 
-                    x_list.append(x_i)
+                        x_list.append(x_i)
 
-                    # Create the target prob distribution
-                    '''
-                    target_tensor_zero = torch.zeros((seq_length, 1), dtype=torch.float64, device=tdevice, requires_grad=False)
-                    target_tensor_one = torch.ones((seq_length, 1), dtype=torch.float64, device=tdevice, requires_grad=False)
-                    target_tensor = torch.cat((target_tensor_one, target_tensor_zero), dim=1)
-                    '''
-                    target_tensor = torch.zeros((seq_length), dtype=torch.float64, device=tdevice, requires_grad=False)
-                    #print('target_tensor size:', target_tensor.size())
-                    if di < len(correct_indices):
-                        for val in correct_indices[di]:
-                            target_tensor[val] = 1.0
-                            #target_tensor[val][0] = 0.0
-                        #print('corr:', correct_indices[di], 'target_tensor:', target_tensor)
-                    target_tensor = target_tensor.view(1, seq_length)
-                    target_probs.append(target_tensor)
-                    #print(di, 'target:', target_tensor)
-                    #print(di, 'predic:', log_probs)
+                        # Create the target prob distribution
+                        '''
+                        target_tensor_zero = torch.zeros((seq_length, 1), dtype=torch.float64, device=tdevice, requires_grad=False)
+                        target_tensor_one = torch.ones((seq_length, 1), dtype=torch.float64, device=tdevice, requires_grad=False)
+                        target_tensor = torch.cat((target_tensor_one, target_tensor_zero), dim=1)
+                        '''
+                        target_tensor = torch.zeros((seq_length), dtype=torch.float64, device=tdevice, requires_grad=False)
+                        #print('target_tensor size:', target_tensor.size())
+                        if di < len(correct_indices):
+                            for val in correct_indices[di]:
+                                target_tensor[val] = 1.0
+                                #target_tensor[val][0] = 0.0
+                            #print('corr:', correct_indices[di], 'target_tensor:', target_tensor)
+                        target_tensor = target_tensor.view(1, seq_length)
+                        target_probs.append(target_tensor)
+                        #print(di, 'target:', target_tensor)
+                        #print(di, 'predic:', log_probs)
 
-                    # Calculate loss per timestep
-                    #loss += criterion(output_matrix.view(1, -1, 2), target_tensor)
-                    #print('loss:', loss.item())
-                    #loss.backward(retain_graph=True)
-                    #encoder_optimizer.step()
-                    #decoder_optimizer.step()
+                        # Calculate loss per timestep
+                        #loss += criterion(output_matrix.view(1, -1, 2), target_tensor)
+                        #print('loss:', loss.item())
+                        #loss.backward(retain_graph=True)
+                        #encoder_optimizer.step()
+                        #decoder_optimizer.step()
 
-                    di += 1
+                        di += 1
 
-                output_indices.append(current_rank)
+                    output_indices.append(current_rank)
 
-                # Un-invert the ranks
-                if self.invert_ranks:
-                    output_indices.reverse()
+                    # Un-invert the ranks
+                    if self.invert_ranks:
+                        output_indices.reverse()
 
-                #output_ranks = indices_to_ranks(output_indices)
-                #if i==0: print('output_indices:', output_indices)
+                    #output_ranks = indices_to_ranks(output_indices)
+                    #if i==0: print('output_indices:', output_indices)
 
-                output_tensor = torch.stack(output_probs)
-                #print('output_probs:', output_tensor.size())
-                output_tensor = output_tensor.view(num_timesteps, seq_length)
-                if num_timesteps > 1:
-                    target_tensor = torch.stack(target_probs)
-                    #print('target_probs:', target_tensor.size())
-                    target_tensor = target_tensor.view(num_timesteps, seq_length)
-                    target_tensor = smooth_distribution(target_tensor, self.sigma)
-                else:
-                    target_tensor = target_probs[0].view(1, -1)
+                    output_tensor = torch.stack(output_probs)
+                    #print('output_probs:', output_tensor.size())
+                    output_tensor = output_tensor.view(num_timesteps, seq_length)
+                    if num_timesteps > 1:
+                        target_tensor = torch.stack(target_probs)
+                        #print('target_probs:', target_tensor.size())
+                        target_tensor = target_tensor.view(num_timesteps, seq_length)
+                        target_tensor = smooth_distribution(target_tensor, self.sigma)
+                    else:
+                        target_tensor = target_probs[0].view(1, -1)
 
-                print('target:', target_tensor)
-                #target_tensor = torch.log(target_tensor)
-                print('output tensor:', output_tensor)
-                #print('target smoothed:', target_tensor)
-                print('output:', output_tensor.size(), 'target:', target_tensor.size())
+                    print('target:', target_tensor)
+                    #target_tensor = torch.log(target_tensor)
+                    print('output tensor:', output_tensor)
+                    #print('target smoothed:', target_tensor)
+                    print('output:', output_tensor.size(), 'target:', target_tensor.size())
 
-                loss = criterion(output_tensor, target_tensor)
+                    loss = criterion(output_tensor, target_tensor)
 
-                #loss = criterion(torch.tensor(output_ranks, dtype=torch.float, device=tdevice, requires_grad=True), correct_ranks)
-                print('loss:', loss.item())
-                loss.backward()
-                encoder_optimizer.step()
-                decoder_optimizer.step()
+                    #loss = criterion(torch.tensor(output_ranks, dtype=torch.float, device=tdevice, requires_grad=True), correct_ranks)
+                    print('loss:', loss.item())
+                    loss.backward()
+                    encoder_optimizer.step()
+                    decoder_optimizer.step()
 
-                #return loss.item() / target_length
-                if (i) % print_every == 0:
-                    print('Epoch [%d/%d], Loss: %.4f' %(epoch, num_epochs, loss.item()))
+                    #return loss.item() / target_length
+                    if (i) % print_every == 0:
+                        print('Epoch [%d/%d], Loss: %.4f' %(epoch, num_epochs, loss.item()))
                 i += 1
 
             # Save checkpoint
@@ -1301,6 +1304,112 @@ class SetToSequenceGroup:
                        os.path.join(self.checkpoint_dir, 'checkpoint.pth'))
             print('Saved checkpoint for epoch', epoch)
         print('training took', time.time()-start, 's')
+
+    def forward(self, x, batch_size=1, return_encodings=True):
+        #print("X 000:", str(type(testX[0][0][0])))
+        #print("X list:", str(len(x)))
+        outputs = []
+        max_di = 1000
+        encodings = []
+
+        # Run the model
+        batchXnp = x
+        #if debug: print("batchX len:", len(batchXnp))
+
+        #print("batchX size:", str(batchX.size()), "batchY size:", str(batchY.size()))
+        if debug: print("forward x:", str(batchXnp))
+        seq_length = len(batchXnp)
+        #input_length = self.encoder.read_cycles
+        #if debug: print("test seq_length:", str(seq_length))
+
+        if seq_length == 0:
+            output_ranks = []
+
+        else:
+            #with torch.no_grad():
+            # Run the encoder
+            mem_block, encoder_hidden = self.encoder(batchXnp)
+            if return_encodings:
+                encodings = mem_block
+                #encodings.append(mem_block)
+
+            # Run the decoder
+            decoder_hidden = encoder_hidden
+
+            # Initialize the prediction
+            x_i = torch.zeros(self.encoder.hidden_size, dtype=torch.float64, device=tdevice)
+            output_indices = []
+            done_mask = torch.ones(seq_length, dtype=torch.float64, device=tdevice)
+
+            # Run until we've picked all the items
+            chosen = []
+            di = 0
+            #avg_gap = 0.0
+            while torch.max(done_mask).item() > 0.0 and (di < max_di):
+                index, decoder_hidden, done_mask, log_probs = self.decoder(x_i.view(1, -1), decoder_hidden, mem_block, done_mask)
+
+                # Select multiple items at each timestep
+                index = int(index.item())
+
+                # Allow multiple events to be output at the same rank (prob threshold?)
+                log_probs = log_probs * done_mask
+                # Fix any nans
+                for li in range(log_probs.size(0)):
+                    if math.isnan(log_probs[li]) or done_mask[li] == float('-inf'):
+                        log_probs[li] = float('-inf')
+                print('test di:', di, 'mask:', done_mask)
+                print('log_probs:', log_probs)
+                max_tensor, index_tensor = torch.max(log_probs, dim=0)
+                #target_index = int(index_tensor.item())
+                max_prob = max_tensor.item()
+                #print('max_prob:', max_prob)
+                targets = []
+                n = float(log_probs.size(0))
+                #print('n:', n)
+
+                for j in range(log_probs.size(0)):
+                    if done_mask[j] > 0.0:# or max_prob == 0.0:
+                        prob = log_probs[j]
+                        if (math.fabs(max_prob - prob) <= (self.group_thresh)) or math.isinf(max_prob):
+                            targets.append(j)
+                            print('choosing item', j, 'with prob', log_probs[j].item())
+                            done_mask[j] = float('-inf')
+
+                if len(targets) > 0:
+                    output_indices.append(targets)
+
+                xi_list = []
+                x_i = torch.zeros(self.hidden_size, dtype=torch.float64, device=tdevice)
+                print('targets:', len(targets), targets)
+                for ti in targets:
+                    x_i = mem_block[ti]
+                    xi_list.append(x_i)
+                if len(xi_list) > 1:
+                    x_i = torch.mean(torch.stack(xi_list), dim=0)
+                #print('test x_i:', x_i.size())
+
+                di += 1
+            # End torch.no_grad
+
+            #output_indices.append(current_rank)
+            # Un-invert the ranks
+            if self.invert_ranks:
+                output_indices.reverse()
+
+            output_ranks = indices_to_ranks(output_indices)
+            print('output_ranks:', output_ranks)
+            # end if seq_length > 0
+
+            outputs = torch.tensor(output_ranks, dtype=torch.float).view(1, -1)
+            #outputs.append(output_ranks)
+            if not return_encodings:
+                del mem_block
+                del encoder_hidden
+                torch.cuda.empty_cache()
+        if return_encodings:
+            return outputs, encodings
+        else:
+            return outputs
 
     def predict(self, testX, batch_size=1, return_encodings=False):
         #print("X 000:", str(type(testX[0][0][0])))
@@ -1322,6 +1431,7 @@ class SetToSequenceGroup:
 
             if seq_length == 0:
                 output_ranks = []
+                encodings.append(None)
 
             else:
                 with torch.no_grad():
@@ -1486,7 +1596,7 @@ class OrderGRU(nn.Module):
                 self.ae_trained = True
             else:
                 #self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
-                self.autoencoder = Autoencoder(input_size, encoding_size, use_double=False, autoencoder_file=ae_file, encoder_name=encoder_name)
+                self.autoencoder = Autoencoder(input_size, encoding_size, use_double=False, autoencoder_file=ae_file, encoder_name=encoder_name, checkpoint_dir=checkpoint_dir)
         #else:
         #    self.gru0 = nn.GRU(input_size+1, int(encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
         self.gru1 = nn.GRU((encoding_size+time_encoding_size), int(hidden_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
@@ -2008,7 +2118,7 @@ class EncoderRNN(nn.Module):
         self.num_layers = num_layers
         #self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
 
-        self.embedder = Embedder(encoder_name, encoding_size=hidden, use_gru=True)
+        self.embedder = Embedder(encoder_name, encoding_size=hidden-2, use_gru=True)
 
         self.lstm = nn.GRU(input_size=self.input_size, hidden_size=self.hidden_size, batch_first=True, bidirectional=True).to(tdevice)
         self.relu = nn.ReLU().to(tdevice)
@@ -2035,6 +2145,7 @@ class EncoderRNN(nn.Module):
         #time_words = row[2]
         #tflags = row[3]
         #time_val = row[4]
+        pol_flag = row[6][0]
 
         ev_text = ['<sos>'] + context + ['<eos>']
         flags = [0] + word_flags + [0]
@@ -2042,8 +2153,12 @@ class EncoderRNN(nn.Module):
         ae_row = row
 
         enc, emb = self.embedder(ae_row, return_emb=True, noise_factor=noise_factor)
+        flag_tensor = torch.tensor([pol_flag, pol_flag], device=tdevice, dtype=torch.float).view(1, 1, -1).repeat(1, enc.size(1), 1)
+        print('flag_tensor:', flag_tensor)
         if self.use_double:
             enc = enc.double()
+            flag_tensor = flag_tensor.double()
+        enc = torch.cat((enc, flag_tensor), dim=2)
 
         #h0 = torch.FloatTensor(self.num_layers*2, 1, self.hidden_size).to(tdevice)
         #c0 = torch.FloatTensor(self.num_layers*2, 1, self.hidden_size).to(tdevice)
@@ -2104,8 +2219,9 @@ class DecoderRNN(nn.Module):
 
 
 class Autoencoder(nn.Module):
-    def __init__(self, input_size, hidden_size, batch_size=1, num_layers=1, use_double=False, autoencoder_file=None, encoder_name='elmo'):
+    def __init__(self, input_size, hidden_size, batch_size=1, num_layers=1, use_double=False, autoencoder_file=None, encoder_name='elmo', checkpoint_dir=None):
         super(Autoencoder, self).__init__()
+        self.checkpoint_dir = checkpoint_dir
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.batch_size = batch_size
@@ -2170,7 +2286,23 @@ class Autoencoder(nn.Module):
         enc_optimizer = optim.Adam(self.encoder.parameters(), lr=learning_rate)
         dec_optimizer = optim.Adam(self.decoder.parameters(), lr=learning_rate)
 
-        for epoch in range(epochs):
+        # Check for model checkpoint
+        start_epoch = 0
+        enc_checkpoint_file = os.path.join(self.checkpoint_dir, 'ae_enc_checkpoint.pth')
+        dec_checkpoint_file = os.path.join(self.checkpoint_dir, 'ae_dec_checkpoint.pth')
+        if os.path.exists(enc_checkpoint_file):
+            enc_check = torch.load(enc_checkpoint_file)
+            dec_check = torch.load(dec_checkpoint_file)
+            self.encoder.load_state_dict(enc_check['state_dict'])
+            self.decoder.load_state_dict(dec_check['state_dict'])
+            enc_optimizer.load_state_dict(enc_check['optimizer'])
+            dec_optimizer.load_state_dict(dec_check['optimizer'])
+            loss = dec_check['loss']
+            start_epoch = dec_check['epoch'] + 1
+            print('loading from checkpoint, restarting at epoch', start_epoch)
+
+        # Train the model
+        for epoch in range(start_epoch, epochs):
             print('autoencoder epoch', str(epoch))
             i = 0
             #batch_size = 1
@@ -2383,6 +2515,13 @@ class Autoencoder(nn.Module):
             total_acc = torch.mean(acc_tensor)
             print('avg recon acc (train set):', total_acc.item())
 
+            # Save checkpoint
+            torch.save({'epoch': epoch, 'state_dict': self.encoder.state_dict(), 'optimizer': enc_optimizer.state_dict(), 'loss': loss},
+                       os.path.join(self.checkpoint_dir, 'ae_enc_checkpoint.pth'))
+            torch.save({'epoch': epoch, 'state_dict': self.decoder.state_dict(), 'optimizer': dec_optimizer.state_dict(), 'loss': loss},
+                       os.path.join(self.checkpoint_dir, 'ae_dec_checkpoint.pth'))
+            print('Saved checkpoint for epoch', epoch)
+
         print('Saving autoencoder to:', self.file)
         torch.save(self, self.file)
         print('Autoencoder training took', (time.time()-start)/60, 'mins')
@@ -2403,14 +2542,20 @@ class TimeEncoder(nn.Module):
         if use_cuda:
             self.elmo = self.elmo.cuda()
         self.gru = nn.GRU(self.input_size, int(self.encoding_size/2), bidirectional=True, dropout=dropout_p, batch_first=True)
-        self.linear = nn.Linear((self.encoding_size+2)*2, self.output_size)
+        if use_time_type:
+            self.linear = nn.Linear((self.encoding_size+2)*2, self.output_size)
+        else:
+            self.linear = nn.Linear((self.encoding_size)*2, self.output_size)
         self.softmax = nn.Softmax(dim=2)
         self.labelencoder = LabelEncoder()
 
     def encode(self, timex):
-        timetype = self.labelencoder.transform([timex[0]])
-        timex = timex[1:]
-        print('timex:', timetype, timex)
+        # Time type
+        if use_time_type:
+            timetype = self.labelencoder.transform([timex[0]])
+            timex = timex[1:]
+            print('timex:', timetype, timex)
+
         character_ids = batch_to_ids(timex)
         if use_cuda:
             character_ids = character_ids.cuda()
@@ -2424,8 +2569,9 @@ class TimeEncoder(nn.Module):
         time_enc = torch.mean(time_enc, dim=1).squeeze()
 
         # Concat the time type
-        type_tensor = torch.tensor(timetype, dtype=torch.float, device=tdevice)
-        time_enc = torch.cat((time_enc, type_tensor, type_tensor), dim=0) # Add 2 so the results will be an even number
+        if use_time_type:
+            type_tensor = torch.tensor(timetype, dtype=torch.float, device=tdevice)
+            time_enc = torch.cat((time_enc, type_tensor, type_tensor), dim=0) # Add 2 so the results will be an even number
 
         return time_enc
 

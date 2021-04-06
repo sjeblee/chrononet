@@ -68,6 +68,11 @@ class NeuralOrderModel(ModelBase):
         use_ae = (str(use_autoencoder) == 'True')
         #ae_file = '/h/sjeblee/research/data/thyme/chrono/orders2s_thyme_128_32/autoencoder.model'
         ae_file = os.path.join(checkpoint_dir, 'autoencoder.model')
+        if encoder_file is None:
+            encoder_file = os.path.join(checkpoint_dir, 'time_encoding.model')
+        job_id = os.environ.get('SLURM_JOB_ID')
+        checkpoint_dir = os.path.join('/checkpoint/sjeblee', job_id)
+        print('checkpoint_dir:', checkpoint_dir)
         #self.model = GRU_GRU(self.input_size, self.encoding_size, self.hidden_size, self.output_size, dropout_p=self.dropout)
         self.model = SetToSequenceGroup(self.input_size, int(encoding_size), int(encoding_size), int(time_encoding_size), int(hidden_size), self.output_size,
                                         dropout_p=float(dropout), read_cycles=int(read_cycles), group_thresh=self.group_thresh,
@@ -77,7 +82,7 @@ class NeuralOrderModel(ModelBase):
     def fit(self, X, Y):
         self.model.fit(X, Y, num_epochs=self.epochs)
 
-    def predict(self, X, group_thresh=0.1, return_encodings=False):
+    def predict(self, X, group_thresh=0.2, return_encodings=False):
         if group_thresh is not None:
             self.model.group_thresh = group_thresh
         return self.model.predict(X, return_encodings=return_encodings)
@@ -102,6 +107,11 @@ class NeuralLinearModel(ModelBase):
         self.epochs = int(epochs)
         use_ae = (str(use_autoencoder) == 'True')
         ae_file = os.path.join(checkpoint_dir, 'autoencoder.model')
+        if encoder_file is None:
+            encoder_file = os.path.join(checkpoint_dir, 'time_encoding.model')
+        job_id = os.environ.get('SLURM_JOB_ID')
+        #checkpoint_dir = os.path.join('/checkpoint/sjeblee', job_id)
+        print('checkpoint_dir:', checkpoint_dir)
         self.model = OrderGRU(self.input_size, int(encoding_size), int(time_encoding_size), int(hidden_size), self.output_size, encoder_file,
                               dropout_p=float(dropout), use_autoencoder=use_ae, ae_file=ae_file, checkpoint_dir=checkpoint_dir)
         #self.model = SetToSequence(self.input_size, self.encoding_size, self.time_encoding_size, self.hidden_size, self.output_size,

@@ -211,14 +211,16 @@ class ElmoCNN(nn.Module):
 
 class JointCNN(nn.Module):
 
-    def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=10, word_pad_size=200, reduce_size=0, timeline_size=128, use_double=False, endtoend=True, checkpoint_dir=None):
+    def __init__(self, input_size, num_classes, num_epochs=10, dropout_p=0.1, kernel_num=100, kernel_sizes=5, loss_func='crossentropy', pad_size=10, word_pad_size=200, reduce_size=0, timeline_size=128, use_double=False, endtoend=True, checkpoint_dir=None, output_dir=None):
         super(JointCNN, self).__init__()
 
         self.checkpoint_dir = checkpoint_dir
+        self.output_dir = output_dir
         print('self.checkpoint_dir:', self.checkpoint_dir)
+        print('self.output_dir:', self.output_dir)
         self.endtoend = endtoend
         if self.endtoend:
-            order_modelfile = os.path.join(self.checkpoint_dir, 'neurallinear.model')
+            order_modelfile = os.path.join(self.output_dir, 'neural.model')
             print('loading ordering model from:', order_modelfile)
             self.order_model = torch.load(order_modelfile)
 
@@ -262,14 +264,20 @@ class JointCNN(nn.Module):
 
         if self.endtoend:
             ranks, encodings = self.order_model.model.forward(x[1])
-            num_ranks = ranks.size(1)
-            print('ranks:', num_ranks, ranks)
-            #ranks = torch.tensor(ranks, dtype=torch.float, device=tdevice).view(1, num_ranks)
-            print('timeline:', encodings.size(), 'ranks:', ranks.size())
+            if ranks is None or len(ranks) == 0:
+                num_ranks = 1
+                x_timeline = torch.zeros((1, 1, self.timeline_size), dtype=torch.float, device=tdevice)
+            else:
+                if type(ranks) is list:
+                    ranks = torch.tensor(ranks, device=tdevice)
+                num_ranks = ranks.size(1)
+                print('ranks:', num_ranks, ranks)
+                #ranks = torch.tensor(ranks, dtype=torch.float, device=tdevice).view(1, num_ranks)
+                print('timeline:', encodings.size(), 'ranks:', ranks.size())
 
-            # Re-order the timeline according to rank
-            #input = torch.cat((X, ranks), dim=2)
-            x_timeline = data_util.reorder_encodings([encodings], [ranks])[0]
+                # Re-order the timeline according to rank
+                #input = torch.cat((X, ranks), dim=2)
+                x_timeline = data_util.reorder_encodings([encodings], [ranks])[0]
 
         else:
             x_timeline = x[1].to(tdevice).view(1, -1, self.timeline_size)
@@ -334,7 +342,20 @@ class JointCNN(nn.Module):
         else:
             print('ERROR: unrecognized loss function name')
 
-        for epoch in range(self.epochs):
+        start_epoch = 0
+
+        # Check for model checkpoint
+        checkpoint_file = os.path.join(self.checkpoint_dir, 'checkpoint.pth')
+        if os.path.exists(checkpoint_file):
+            check = torch.load(checkpoint_file)
+            self.load_state_dict(check['state_dict'])
+            optimizer.load_state_dict(check['optimizer'])
+            loss = check['loss']
+            start_epoch = check['epoch'] + 1
+            print('loading from checkpoint, restarting at epoch', start_epoch)
+
+        # Train the model
+        for epoch in range(start_epoch, self.epochs):
             print('epoch', str(epoch))
             i = 0
             numpy.random.seed(seed=1)
@@ -372,6 +393,11 @@ class JointCNN(nn.Module):
                 unit = "m"
             print("time so far: ", str(ct), unit)
             print('loss: ', loss_val.data.item())
+
+            # Save checkpoint
+            torch.save({'epoch': epoch, 'state_dict': self.state_dict(), 'optimizer': optimizer.state_dict(), 'loss': loss},
+                       os.path.join(self.checkpoint_dir, 'checkpoint.pth'))
+            print('Saved checkpoint for epoch', epoch)
 
     def predict(self, testX, testids=None, labelencoder=None, collapse=False, threshold=0.1, probfile=None):
         y_pred = [] # Original prediction if threshold is not in used for ill-defined.
@@ -413,6 +439,7 @@ class MatrixCNN_module(nn.Module):
         self.Ks = kernel_sizes
         self.pad_size = pad_size
         self.use_double = use_double
+        print('matrix_cnn_module use_double:', self.use_double)
 
         self.convs = []
         for kn in range(self.Ks):
@@ -436,11 +463,17 @@ class MatrixCNN_module(nn.Module):
         return x
 
     def forward(self, x):
-        #print('x input size:', x.size(), x)
+        print('x input:', x)
         batch_size = len(x)
         print('batch size:', batch_size, 'dim:', self.dim)
         X = x[0].view(batch_size, -1, self.dim) # (N, W, D)
-        X = x.to(tdevice)
+        X = X.to(tdevice)
+        if self.use_double:
+            X = X.double()
+        #if X.dtype == torch.float64:
+        #    self.use_double = True
+        #else:
+        #    self.use_double = False
         print('cnn_module X:', X.size())
 
         # Pad to 10 words
@@ -643,7 +676,7 @@ class MatrixCNN(nn.Module):
 
 class ElmoRNN(nn.Module):
 
-    def __init__(self, input_size, hidden, num_classes, num_epochs=10, dropout_p=0.1, loss_func='crossentropy', batch_size=1):
+    def __init__(self, input_size, hidden, num_classes, num_epochs=10, dropout_p=0.1, loss_func='crossentropy', batch_size=1, checkpoint_dir=None):
         super(ElmoRNN, self).__init__()
         self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
 
@@ -652,6 +685,7 @@ class ElmoRNN(nn.Module):
         self.loss_func = loss_func
         self.batch_size = batch_size
         self.hidden_size = hidden
+        self.checkpoint_dir = checkpoint_dir
         print('GRU model: input:', input_size, 'hidden:', hidden, 'output:', C)
 
         self.gru = nn.GRU(input_size=int(input_size), hidden_size=int(self.hidden_size/2), batch_first=True, bidirectional=True, dropout=dropout_p)
@@ -677,7 +711,7 @@ class ElmoRNN(nn.Module):
         Does NOT support joint training yet
         returns: the CNN model
     '''
-    def fit(self, X, Y):
+    def fit(self, X, Y, Y2=None):
         # Train the CNN, return the model
         #batch_size = 16
         learning_rate = 0.001
@@ -704,7 +738,20 @@ class ElmoRNN(nn.Module):
         else:
             print('ERROR: unrecognized loss function name')
 
-        for epoch in range(self.epochs):
+        start_epoch = 0
+
+        # Check for model checkpoint
+        checkpoint_file = os.path.join(self.checkpoint_dir, 'checkpoint.pth')
+        if os.path.exists(checkpoint_file):
+            check = torch.load(checkpoint_file)
+            self.load_state_dict(check['state_dict'])
+            optimizer.load_state_dict(check['optimizer'])
+            loss = check['loss']
+            start_epoch = check['epoch'] + 1
+            print('loading from checkpoint, restarting at epoch', start_epoch)
+
+        # Train the model
+        for epoch in range(start_epoch, self.epochs):
             print('epoch', str(epoch))
             i = 0
             numpy.random.seed(seed=1)
@@ -742,6 +789,11 @@ class ElmoRNN(nn.Module):
                 unit = "m"
             print("time so far: ", str(ct), unit)
             print('loss: ', loss_val.data.item())
+
+            # Save checkpoint
+            torch.save({'epoch': epoch, 'state_dict': self.state_dict(), 'optimizer': optimizer.state_dict(), 'loss': loss},
+                       os.path.join(self.checkpoint_dir, 'checkpoint.pth'))
+            print('Saved checkpoint for epoch', epoch)
 
     def predict(self, testX, testids=None, labelencoder=None, collapse=False, threshold=0.1, probfile=None):
         y_pred = [] # Original prediction if threshold is not in used for ill-defined.
@@ -804,20 +856,192 @@ class MatrixRNN(ElmoRNN):
 
 class OrderRNN(nn.Module):
 
-    def __init__(self, input_size, hidden_size, num_classes, encoding_size=64, time_encoding_size=16, output_size=1, num_epochs=10, dropout_p=0.1, loss_func='crossentropy', batch_size=1, encoder_file=None):
+    def __init__(self, input_size, hidden_size, num_classes, encoding_size=64, time_encoding_size=16, output_size=1, num_epochs=10, dropout_p=0.1, loss_func='crossentropy', batch_size=1, encoder_file=None, output_dir=None):
         super(OrderRNN, self).__init__()
         #self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
-        self.order_model = OrderGRU(input_size, int(encoding_size), int(time_encoding_size), hidden_size, output_size, encoder_file, dropout_p=0.1)
+
+        self.output_dir = output_dir
+        order_file = os.path.join(self.output_dir, 'neurallinear.model')
+        if os.path.exists(order_file):
+            self.order_model = torch.load(order_file).model
+        else:
+            self.order_model = OrderGRU(input_size, int(encoding_size), int(time_encoding_size), hidden_size, output_size, encoder_file, dropout_p=0.1)
 
         C = num_classes
         self.epochs = num_epochs
         self.loss_func = loss_func
         self.batch_size = batch_size
         self.hidden_size = hidden_size
+        self.input_size = input_size
+        in_size = encoding_size + time_encoding_size + 1
+        print('Joint order/classify model: input:', in_size, 'hidden:', hidden_size, 'output:', C, 'batch_size:', self.batch_size)
+
+        self.gru = nn.GRU(input_size=in_size, hidden_size=int(self.hidden_size/2), batch_first=True, bidirectional=True, dropout=dropout_p)
+        self.fc1 = nn.Linear(self.hidden_size, C)
+        self.logsoftmax = nn.LogSoftmax(dim=1)
+
+    def forward(self, x):
+        #hn = None
+        batch_size = len(x)
+        print('batch_size:', batch_size, 'x:', x)
+        #x_tensor = x[0]
+        #print('x tensor size:', x.size())
+        ranks, X = self.order_model.forward(x[0])
+        #num_ranks = ranks.size(1)
+        #print('ranks:', num_ranks, ranks)
+        #ranks = torch.tensor(ranks, dtype=torch.float, device=tdevice).view(1, num_ranks)
+        print('timeline:', X.size(), 'ranks:', ranks.size())
+
+        # TODO: re-order the timeline according to rank
+        input = torch.cat((X, ranks), dim=2)
+        print('rnn input:', input.size())
+        output_full, hn = self.gru(input)
+        print('rnn output:', output_full.size())
+        output = output_full[:, -1, :].view(-1, self.hidden_size)
+
+        # What was I doing here???
+        #output, hn = self.gru(X, hn)
+        #output = X[:, -1, :].view(-1, self.hidden_size) # Save only the last timestep
+
+        print('output:', output.size())
+        out = self.fc1(output)
+        return out, ranks
+
+    ''' Create and train an RNN model
+        Hybrid features supported - pass structured feats as X2
+        Does NOT support joint training yet
+        returns: the CNN model
+    '''
+    def fit(self, X, Y, Y2=None):
+        # Train the CNN, return the model
+        #batch_size = 16
+        learning_rate = 0.001
+
+        if use_cuda:
+            self = self.to(tdevice)
+
+        # Train final model
+        self.train(X, Y, learning_rate, Y2)
+
+    def train(self, X, Y, learning_rate, Y2=None):
+        #Xarray = numpy.asarray(X).astype('float')
+        Yarray = Y.astype('int')
+        X_len = len(X)
+        print('X len:', X_len)
+        print('Y numpy shape:', str(Yarray.shape))
+        #print('Y2', len(Y2))
+        print('batch_size:', self.batch_size)
+        steps = 0
+        st = time.time()
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+
+        if self.loss_func == 'crossentropy':
+            loss = nn.CrossEntropyLoss()
+        else:
+            print('ERROR: unrecognized loss function name')
+
+        loss2 = nn.MSELoss()
+
+        for epoch in range(self.epochs):
+            print('epoch', str(epoch))
+            i = 0
+            numpy.random.seed(seed=1)
+            perm = torch.from_numpy(numpy.random.permutation(X_len))
+            permutation = perm.long()
+            perm_list = perm.tolist()
+            Xiter = [X[i] for i in perm_list]
+            #Xiter = X[permutation]
+            Yiter = Yarray[permutation]
+            if Y2 is not None:
+                Y2iter = Y.astype('int')[permutation]
+
+            while i+self.batch_size < X_len:
+                batchX = Xiter[i:i+self.batch_size]
+                batchY = Yiter[i:i+self.batch_size]
+                #Xtensor = torch.from_numpy(batchX).float()
+                Ytensor = torch.from_numpy(batchY).long()
+                if use_cuda:
+                    Ytensor = Ytensor.to(tdevice)
+
+                if Y2 is not None:
+                    batchY2 = Y2iter[i:i+self.batch_size]
+                    Y2tensor = torch.from_numpy(batchY2).float()
+                    if use_cuda:
+                        Y2tensor = Y2tensor.to(tdevice)
+
+                optimizer.zero_grad()
+                output, ranks = self(batchX)
+
+                # Rank loss
+                #print('ranks:', ranks)
+                #rank_loss = loss2(ranks, Y2tensor)
+                #print('rank loss:', rank_loss)
+                #rank_loss.backward(retain_graph=True)
+
+                # Classification loss
+                loss_val = loss(output, Ytensor)
+                print('class loss: ', loss_val.data.item())
+                loss_val.backward()
+                optimizer.step()
+                steps += 1
+                i = i+self.batch_size
+
+            # Print epoch time
+            ct = time.time() - st
+            unit = "s"
+            if ct > 60:
+                ct = ct/60
+                unit = "m"
+            print("time so far: ", str(ct), unit)
+            print('loss: ', loss_val.data.item())
+
+    def predict(self, testX, testids=None, labelencoder=None, collapse=False, threshold=0.1, probfile=None):
+        y_pred = [] # Original prediction if threshold is not in used for ill-defined.
+
+        for x in range(len(testX)):
+            input_row = testX[x]
+
+            icd = None
+            if icd is None:
+                icd_var, ranks = self([input_row])
+                # Softmax and log softmax values
+                icd_vec = self.logsoftmax(icd_var).squeeze()
+                cat = torch.argmax(icd_vec).item()
+                if x == 0:
+                    print('cat:', cat)
+
+            y_pred.append(cat)
+
+        return y_pred
+
+
+####################################
+# ELMo RNN model
+####################################
+
+class JointOrderRNN(nn.Module):
+
+    def __init__(self, input_size, hidden_size, num_classes, encoding_size=64, time_encoding_size=16, output_size=1, num_epochs=10, dropout_p=0.1, loss_func='crossentropy', batch_size=1, encoder_file=None, output_dir=None):
+        super(OrderRNN, self).__init__()
+        #self.elmo = Elmo(options_file, weight_file, 1, dropout=0).to(tdevice)
+
+        self.output_dir = output_dir
+        order_file = os.path.join(self.output_dir, 'neurallinear.model')
+        if os.path.exists(order_file):
+            self.order_model = torch.load(order_file).model
+        else:
+            self.order_model = OrderGRU(input_size, int(encoding_size), int(time_encoding_size), hidden_size, output_size, encoder_file, dropout_p=0.1)
+
+        C = num_classes
+        self.epochs = num_epochs
+        self.loss_func = loss_func
+        self.batch_size = batch_size
+        self.hidden_size = hidden_size
+        self.input_size = input_size
         print('Joint order/classify model: input:', input_size, 'hidden:', hidden_size, 'output:', C, 'batch_size:', self.batch_size)
 
-        self.gru = nn.GRU(input_size=self.hidden_size+1, hidden_size=int(self.hidden_size/2), batch_first=True, bidirectional=True, dropout=dropout_p)
-        self.fc1 = nn.Linear(self.hidden_size*2, C)
+        self.gru = nn.GRU(input_size=self.input_size+1, hidden_size=int(self.hidden_size/2), batch_first=True, bidirectional=True, dropout=dropout_p)
+        self.fc1 = nn.Linear(self.hidden_size, C)
         self.logsoftmax = nn.LogSoftmax(dim=1)
 
     def forward(self, x):

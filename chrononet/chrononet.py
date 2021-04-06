@@ -24,7 +24,7 @@ from models.linking.time_linker import TimeLinkerFactory
 from models.encoding.time_encoding import TimeEncodingFactory
 from models.ordering.neural_order import NeuralOrderFactory, HyperoptNeuralOrderFactory, NeuralLinearFactory, SetOrderFactory
 from models.ordering.random_order import RandomOrderFactory, MentionOrderFactory
-from models.classification.cnn import CNNFactory, MatrixCNNFactory, RNNFactory, MatrixRNNFactory, JointCNNFactory
+from models.classification.cnn import CNNFactory, MatrixCNNFactory, RNNFactory, MatrixRNNFactory, JointCNNFactory, OrderRNNFactory
 from models.classification.random import RandomFactory
 
 # SETUP
@@ -34,7 +34,7 @@ fe_map = {'relations': relations.extract_relations, 'syntactic': syntactic.sent_
 vector_feats = ['event_vectors']
 model_map = {'crf': CRFfactory, 'random': RandomOrderFactory, 'mention': MentionOrderFactory, 'neural': NeuralOrderFactory, 'neurallinear': NeuralLinearFactory,
              'setorder': SetOrderFactory, 'hyperopt': HyperoptNeuralOrderFactory,
-             'cnn': CNNFactory, 'rnn': RNNFactory, 'matrixcnn': MatrixCNNFactory, 'matrixrnn': MatrixRNNFactory, 'jointcnn': JointCNNFactory, 'ncrfpp': NCRFppFactory,
+             'cnn': CNNFactory, 'rnn': RNNFactory, 'orderrnn': OrderRNNFactory, 'matrixcnn': MatrixCNNFactory, 'matrixrnn': MatrixRNNFactory, 'jointcnn': JointCNNFactory, 'ncrfpp': NCRFppFactory,
              'randclass': RandomFactory, 'time_encoding': TimeEncodingFactory, 'distance': TimeLinkerFactory}
 metric_map = {'p': eval_metrics.precision, 'r': eval_metrics.recall, 'f1': eval_metrics.f1, 'mae': ordering_metrics.rank_mae,
               'mse': ordering_metrics.rank_mse, 'poa': ordering_metrics.rank_pairwise_accuracy, 'tau': ordering_metrics.kendalls_tau,
@@ -180,7 +180,7 @@ def main():
         if os.path.exists(test_filename):
             order_test_df = pandas.read_csv(test_filename)
         else:
-            order_test_df = test_data_adapter.to_order(test_df, orig_test_df)
+            order_test_df = test_data_adapter.to_order(test_df, orig_test_df, use_gold_tags=should_eval)
         if save_intermediate:
             if debug:
                 print('Saving ordering df...')
@@ -296,7 +296,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
     dim = 1024
 
     order_classify = False
-    if stage_name == 'classification' and 'rnn' in models:
+    if stage_name == 'classification' and ('rnn' in models or 'orderrnn' in models):
         order_classify = True
 
     # Load model params from config
@@ -434,7 +434,6 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                 print('Wrote train time pairs to file')
             '''
             # Load extra time pairs for training
-            '''
             if train_dataset == 'thyme':
                 train_extra, labels_extra = data_util.load_time_pairs(stage_config['train_time_pairs'])
                 print('train_extra:', len(train_extra), 'labels_extra:', len(labels_extra))
@@ -445,7 +444,6 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                     train_Y = labelencoder.transform(labels_extra).tolist() #+ train_Y
                 #train_X = train_extra #+ train_X
                 #train_Y = labelencoder.transform(labels_extra).tolist() #+ train_Y
-            '''
 
         # Get rank labels for joint ordering/classification model
         if order_classify:
@@ -459,7 +457,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             train_X, train_Y = data_util.shuffle_input(train_X, train_Y)
             test_X, test_Y = data_util.shuffle_input(test_X, test_Y)
 
-        if 'cnn' in modelname or modelname in ['rnn', 'matrixrnn']:
+        if 'cnn' in modelname or modelname in ['rnn', 'matrixrnn', 'orderrnn']:
             num_classes = len(labelencoder.classes_)
             stage_params['num_classes'] = num_classes
             print('added num_classes to params')
@@ -496,7 +494,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
             time_modelfile = modelfile
             print('saved time_modelfile')
 
-        if modelname in ['neural', 'neurallinear', 'rnn', 'setorder']:
+        if modelname in ['neural', 'neurallinear', 'rnn', 'setorder', 'orderrnn']:
             stage_params['encoder_file'] = time_modelfile
 
         if modelname == 'ground_truth':
@@ -527,7 +525,7 @@ def run_stage(stage_name, config, train_data_adapter, test_data_adapter, train_d
                 else:
                     model.fit(train_X, train_Y)
                 # Save the model
-                if modelname in ['neural', 'neurallinear', 'cnn', 'ncrfpp', 'rnn', 'matrixcnn', 'matrixrnn', 'time_encoding', 'setorder', 'jointcnn']:
+                if modelname in ['neural', 'neurallinear', 'cnn', 'ncrfpp', 'rnn', 'matrixcnn', 'matrixrnn', 'orderrnn', 'time_encoding', 'setorder', 'jointcnn']:
                     print('Saving model...')
                     save(model, modelfile, 'torch')
 
@@ -682,11 +680,12 @@ def check_alignment(ids, X, Y):
         recid = ids[index]
         x_row = X[index]
         y_row = Y[index]
-        if not len(x_row) == len(y_row):
-            print('ERROR: feature/label mismatch:', recid, 'has', len(x_row), 'features and', len(y_row), 'labels')
-            print('feats:', str(x_row))
-            print('labels:', str(y_row))
-        assert(len(x_row) == len(y_row))
+        if x_row is not None and y_row is not None:
+            if not len(x_row) == len(y_row):
+                print('ERROR: feature/label mismatch:', recid, 'has', len(x_row), 'features and', len(y_row), 'labels')
+                print('feats:', str(x_row))
+                print('labels:', str(y_row))
+            assert(len(x_row) == len(y_row))
 
 
 ''' Save the model to a file

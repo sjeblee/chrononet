@@ -16,7 +16,7 @@ import re
 import subprocess
 import torch
 
-debug = False
+debug = True
 
 #def clean_file(filename):
     # remove blank lines | remove extra spaces| remove leading and trailing spaces  | fix utf-8 chars
@@ -135,7 +135,7 @@ def extract_ranks(events, event_list=None, allow_empty=False):
 
             #if int(rank) == 0:
             #    print('WARNING: rank is 0:', etree.tostring(event))
-            ranks.append(int(rank))
+            ranks.append(float(rank))
             #if int(rank) == 0:
             #    print('WARNING: rank is 0:', etree.tostring(event))
     if debug: print('events:', event_count, 'ranks:', len(ranks))
@@ -279,7 +279,7 @@ def load_time_pairs(filename):
 
 def load_xml_tags(ann, unwrap=True, decode=False):
     if debug: print('load_xml_tags:', ann)
-    if decode or type(ann) is not str:
+    if decode or type(ann) is bytes:
         ann = ann.decode('utf8')
     if unwrap:
         ann_xml = etree.fromstring(ann)

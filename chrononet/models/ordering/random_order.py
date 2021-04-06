@@ -6,7 +6,7 @@ from models.model_base import ModelBase, ModelFactory
 
 class RandomOrderFactory(ModelFactory):
 
-    def get_model():
+    def get_model(params):
         return RandomOrderModel()
 
 class RandomOrderModel(ModelBase):
@@ -26,8 +26,8 @@ class RandomOrderModel(ModelBase):
 
 class MentionOrderFactory(ModelFactory):
 
-    def get_model():
-        return RandomOrderModel()
+    def get_model(params):
+        return MentionOrderModel()
 
 class MentionOrderModel(ModelBase):
 
@@ -42,4 +42,5 @@ class MentionOrderModel(ModelBase):
             for entry in record:
                 doc_ranks.append(rank)
                 rank += 1
+            ranks.append(doc_ranks)
         return ranks

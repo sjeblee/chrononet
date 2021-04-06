@@ -154,17 +154,24 @@ class DataAdapter:
                 new_row['event_ranks'] = event_ranks # These will be in text order
             else:
                 # Reconstruct events from seq
-                print('ERROR: using pred sequences as events not implemented yet!')
-                xml_text = self.to_xml(seq_labels)
+                print('Using pred sequences as events')
+                xml_text, ref_text = self.to_xml(seq_labels, return_text=True)
                 elem = data_util.load_xml_tags(xml_text, unwrap=False)
-                #if self.debug: print('elem:', etree.tostring(elem))
-                events = etree.fromstring()
+                new_row['tags'] = etree.tostring(elem).decode('utf8')
+                new_row['text'] = ref_text
+                if self.debug: print('elem:', etree.tostring(elem))
+                events = etree.fromstring('<events></events>')
+                event_ranks = []
                 for child in elem:
                     if child.tag == 'EVENT':
-                        events.append(etree.tostring(child).decode('utf8'))
+                        events.append(child)
+                        #events.append(etree.tostring(child).decode('utf8'))
+                        event_ranks.append(1) # TEMP: if there are not ref ranks, give every event the same rank
                         if self.debug: print('added event:', etree.tostring(child).decode('utf8'))
 
                 # TODO: propagate gold ranks to pred events based on partial overlap
+                new_row['events'] = etree.tostring(events).decode('utf8')
+                new_row['event_ranks'] = event_ranks
             order_df = order_df.append(new_row, ignore_index=True)
 
         return order_df
@@ -361,6 +368,19 @@ class DataAdapter:
             text = elem_text.strip() + '</EVENT>'
         return text
 
+    def closeelem(self, elem, ref_index):
+        #print('closelabel', prevlabel, elem_text)
+        #t_labels = [BT, IT]
+        #e_labels = [BE, IE]
+        #text = ""
+        if elem is None:
+            return ''
+        else:
+            elem.text = elem.text.strip()
+            elem.set('span', elem.get('span') + ',' + str(ref_index))
+            text = etree.tostring(elem).decode('utf8') + ' '
+            return text
+
     '''
        xmltree
        tag: the name of the classification label to add to the xml
@@ -440,9 +460,82 @@ class DataAdapter:
         tree = etree.ElementTree(root)
         return tree
 
-    def to_xml(self, seq):
-        text = ""
+    def to_xml(self, seq, return_text=False):
+        ref_text = ''
+        ref_index = 0
+        text = ''
+        elem = None
+        elem_text = ''
+        tid = 0
+        eid = 0
+        prevlabel = OO
+        in_elem = False
+        for word, label in seq:
+            print(word, label)
+            # Add xml tags if necessary
+            if label == OO:
+                in_elem = False
+                if prevlabel != OO:
+                    text = text + self.closeelem(elem, ref_index)
+                    elem = None
+                    elem_text = ""
+            elif label == BT or (label == IT and (prevlabel != BT and prevlabel != IT)):
+                text = text + self.closeelem(elem, ref_index) #+ ' <TIMEX3 tid="t' + str(tid) + '" type="TIME" value="">'
+                elem = etree.Element('TIMEX3')
+                elem.set('tid', str(tid))
+                elem.set('type', 'TIME')
+                elem.set('value', '')
+                elem.set('span', str(ref_index))
+                elem.text = ''
+                tid = tid+1
+                in_elem = True
+                #elem_text = ""
+            elif label == BE or (label == IE and (prevlabel != BE and prevlabel != IE)):
+                text = text + self.closeelem(elem, ref_index) #+ ' <EVENT eid="e' + str(eid) + '" class="OCCURRENCE">'
+                elem = etree.Element('EVENT')
+                elem.set('eid', str(eid))
+                elem.set('class', 'OCCURRENCE')
+                elem.set('span', str(ref_index))
+                elem.text = ''
+                eid = eid+1
+                in_elem = True
+                #elem_text = ""
+
+            # Add word
+            if in_elem:
+                elem.text = elem.text + word + ' '
+                ref_text = ref_text + word + ' '
+            else:
+                text = text + word + ' '
+                ref_text = ref_text + word + ' '
+            ref_index = len(ref_text)
+            prevlabel = label
+
+        # Close the final tag
+        text = text + self.closeelem(elem, ref_index)
+        in_elem = False
         elem_text = ""
+        elem = None
+        text = re.sub('LINEBREAK', '\n', text.strip())
+
+        # Fix lines
+        lines = []
+        for line in text.splitlines():
+            lines.append(line.strip())
+        xml_text = '\n'.join(lines) + '\n'
+
+        if return_text:
+            return xml_text, ref_text
+        else:
+            return xml_text
+
+    ''' Backup of to_xml before I changed it to handle elements
+    '''
+    def to_xml_backup(self, seq, return_text=False):
+        ref_text = ''
+        ref_index = 0
+        text = ''
+        elem_text = ''
         tid = 0
         eid = 0
         prevlabel = OO
@@ -469,8 +562,10 @@ class DataAdapter:
             # Add word
             if in_elem:
                 elem_text = elem_text + word + ' '
+                ref_text = ref_text + word + ' '
             else:
                 text = text + ' ' + word
+                ref_text = ref_text + ' ' + word
             prevlabel = label
 
         # Close the final tag
@@ -483,7 +578,12 @@ class DataAdapter:
         lines = []
         for line in text.splitlines():
             lines.append(line.strip())
-        return '\n'.join(lines) + '\n'
+        xml_text = '\n'.join(lines) + '\n'
+
+        if return_text:
+            return xml_text, ref_text
+        else:
+            return xml_text
 
     ''' Converts inline xml tags to a sequence of word, label pairs
         text: the xml narrative as text

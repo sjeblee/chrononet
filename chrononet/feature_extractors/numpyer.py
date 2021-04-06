@@ -65,9 +65,9 @@ def to_labels(df, labelname, labelencoder=None, encode=True):
     # Extract the labels from the dataframe
     for i, row in df.iterrows():
         flist = row[labelname]
-        #if debug: print('flist:', type(flist), str(flist))
-        if type(flist) == str:
-            flist = ast.literal_eval(flist)
+        if debug: print('flist:', type(flist), str(flist))
+        #if type(flist) == str:
+        #    flist = ast.literal_eval(flist)
         if debug and i == 0:
             print('labels[0]:', flist)
         labels.append(flist)
@@ -77,7 +77,7 @@ def to_labels(df, labelname, labelencoder=None, encode=True):
         enc_labels = []
         for rank_list in labels:
             norm_ranks = []
-            if len(rank_list) > 0:
+            if rank_list is not None and len(rank_list) > 0 and not rank_list == '[]':
                 if type(rank_list) == str:
                     rank_list = ast.literal_eval(rank_list)
                 min_rank = float(numpy.nanmin(numpy.array(rank_list, dtype=numpy.float), axis=None))
@@ -217,11 +217,14 @@ def dummy_function(df, feat_name='feats', doc_level=False):
             fake_feats = []
             if row['events'] is not None:
                 print('events:', row['events'], type(row['events']))
-                if type(row['events']) is list and len(row['events']) == 0:
+                if (type(row['events']) is list and len(row['events']) == 0) or (type(row['events']) is str and row['events'] == '[]'):
                     print('event list is empty')
                 else:
-                    event_list = etree.fromstring(str(row['events']))
-                    if debug: print(row['docid'], 'dummy_function events:', type(event_list), etree.tostring(event_list))
+                    if type(row['events']) is list:
+                        event_list = row['events']
+                    else:
+                        event_list = etree.fromstring(str(row['events']))
+                    if debug: print(row['docid'], 'dummy_function events:', type(event_list))#, etree.tostring(event_list))
                     if type(event_list) == str:
                         #event_list = eval(event_list)
                         event_list = ast.literal_eval(event_list)

@@ -162,6 +162,7 @@ def elmo_event_vectors(df, feat_name='feats', flatten=False, use_iso_value=False
     time_types = ['UNK', 'DATE', 'TIME', 'DATETIME', 'DURATION', 'SET']
     timetypeencoder = LabelEncoder()
     timetypeencoder.fit(time_types)
+    flags = []
 
     df[feat_name] = ''
     for i, row in df.iterrows():
@@ -224,6 +225,12 @@ def elmo_event_vectors(df, feat_name='feats', flatten=False, use_iso_value=False
                 next_uid = int(event.spans[-1].seqNo)
                 prev = utt_map[prev_uid].text[0:event.spans[0].startIndex]
                 next = utt_map[next_uid].text[event.spans[-1].endIndex:]
+                pol_flag = 0
+                if 'modality' in event.features and event.features['modality'] == 'negative':
+                    pol_flag = 1
+                flags = []
+                flags.append(pol_flag) # polarity flag
+                flags.append(0) # position flag
             else:
                 span = event.get('span').split(',')
                 prev = text[0:int(span[0])]
@@ -337,7 +344,7 @@ def elmo_event_vectors(df, feat_name='feats', flatten=False, use_iso_value=False
             vec, context, c_flags = context_words(prev, event_text, next, max_len=context_size, use_bert=use_bert)
             #words, word_flags = context_words(prev, event_text, next)
             time_type_enc = [0, 0, 0, 0, 0]
-            event_vecs.append((context, c_flags, time_words, tflags, time_val, time_type_enc))
+            event_vecs.append((context, c_flags, time_words, tflags, time_val, time_type_enc, flags))
         df.at[i, feat_name] = event_vecs
     return df
 
@@ -346,9 +353,18 @@ def elmo_event_vectors(df, feat_name='feats', flatten=False, use_iso_value=False
 '''
 def elmo_word_vectors(df, feat_name='feats'):
     df[feat_name] = ''
+    verilogue = False
     for i, row in df.iterrows():
         if debug: print('elmo words', str(i))
         text = row['text']
+        if type(row['tags']) is list:
+            verilogue = True
+        if verilogue:
+            xmlnode = etree.fromstring(text)
+            new_text = ''
+            for utt in xmlnode:
+                new_text = new_text + ' ' + utt.text
+            text = new_text
         print('narr text:', text)
         words = data_util.split_words(text)
         df.at[i, feat_name] = words

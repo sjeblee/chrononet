@@ -24,8 +24,8 @@ class DataAdapterVA(DataAdapter):
             row['docid'] = child.find('MG_ID').text
             narr_node = child.find('narrative')
 
-            # Ignore records with no narrative
-            if narr_node is not None:
+            # Ignore records with no narrative or if they're not adult
+            if narr_node is not None and child.tag == 'Adult_Anonymous':
                 row['text'] = child.find('narrative').text
                 #row['text_orig'] = child.find('narrative').text
                 #print('narrative:', row['text'])
@@ -50,6 +50,9 @@ class DataAdapterVA(DataAdapter):
                             num_events += 1
                 else:
                     row['tags'] = ''
+                event_list_node = child.find('event_list')
+                if event_list_node is not None:
+                    event_elem = event_list_node
 
                 # Drop records with no annotated events
                 if drop_unlabeled and num_events == 0:
@@ -60,7 +63,7 @@ class DataAdapterVA(DataAdapter):
 
                 if event_elem is not None:
                     row['events'] = etree.tostring(event_elem).decode('utf8')
-                    row['event_ranks'] = data_util.extract_ranks(row['tags'])
+                    row['event_ranks'] = data_util.extract_ranks(etree.tostring(event_elem, encoding='utf8').decode('utf8')) # was: row['tags']
                     if self.debug: print(row['docid'], 'event_ranks:', row['event_ranks'])
                 else:
                     row['events'] = ''
@@ -72,7 +75,10 @@ class DataAdapterVA(DataAdapter):
                     date_node = child.find('Death_YR_Month')
                 if date_node is None:
                     date_node = child.find('InterviewDate')
-                row['dct'] = date_node.text
+                if date_node is not None:
+                    row['dct'] = date_node.text
+                else:
+                    row['dct'] = ''
                 df = df.append(row, ignore_index=True)
         return df
 
