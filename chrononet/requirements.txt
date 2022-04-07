@@ -87,7 +87,7 @@ nbformat==4.4.0
 networkx==2.2
 nltk==3.4
 notebook==6.4.10
-numpy==1.16.1
+numpy==1.21.0
 numpydoc==0.8.0
 overrides==1.9
 packaging==19.0
