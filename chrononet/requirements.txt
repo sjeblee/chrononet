@@ -112,7 +112,7 @@ pyasn1==0.4.5
 pycparser==2.19
 pycryptodome==3.7.3
 pydot==1.4.1
-Pygments==2.3.1
+Pygments==2.7.4
 pyhocon==0.3.35
 pymongo==3.7.2
 pyparsing==2.3.1
