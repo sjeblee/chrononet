@@ -160,7 +160,7 @@ tqdm==4.31.1
 traitlets==4.3.2
 typing==3.6.6
 tzlocal==1.5.1
-ujson==1.35
+ujson==5.2.0
 Unidecode==1.0.23
 urllib3==1.24.1
 uvloop==0.12.1
