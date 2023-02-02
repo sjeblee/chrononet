@@ -169,7 +169,7 @@ wcwidth==0.1.7
 webencodings==0.5.1
 websocket-client==0.55.0
 websockets==7.0
-Werkzeug==0.14.1
+Werkzeug==0.15.5
 widgetsnbextension==3.4.2
 wrapt==1.11.1
 xgboost==0.81
